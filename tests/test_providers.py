@@ -169,6 +169,7 @@ class ProviderTests(unittest.TestCase):
             def to_dict(self): return {"eos_token_id": 9}
         class FakeModel:
             generation_config = FakeConfig()
+            config = FakeConfig()
             device = "cpu"
             def __init__(self): self.kwargs = None
             def generate(self, input_ids, **kwargs):

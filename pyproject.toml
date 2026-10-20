@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sr-turnless-lab"
-version = "0.3.0"
+version = "0.4.0"
 description = "A local, non-agentic laboratory for utterance boundaries and explicit yield"
 readme = "README.md"
 license = "Apache-2.0"
@@ -15,6 +15,7 @@ dependencies = []
 
 [project.optional-dependencies]
 local = ["torch>=2.2", "transformers>=4.45,<6"]
+mlx = ["mlx-lm>=0.31.3,<0.32", "transformers>=4.45,<6"]
 
 [project.urls]
 Repository = "https://github.com/RyoSpiralArchitect/sr-turnless-lab"

@@ -9,7 +9,7 @@
 </head>
 <body>
   <header class="masthead">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">∴</span><div><h1>SR Turnless Lab<span class="version">v0.3</span></h1><p data-i18n="tagline">An utterance can end before the conversation is handed over.</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">∴</span><div><h1>SR Turnless Lab<span class="version">v0.4</span></h1><p data-i18n="tagline">An utterance can end before the conversation is handed over.</p></div></div>
     <div class="header-actions"><span id="provider-label" class="provider-label" data-i18n="notConnected">Scripted demo / no model connected</span><label class="sr-only" for="ui-language" data-i18n="uiLanguage">Interface language</label><select id="ui-language" aria-label="Interface language" data-i18n-aria="uiLanguage"><option value="en">English</option><option value="ja">日本語</option></select><button id="export" class="button quiet" disabled><span data-i18n="export">Export JSONL</span> ↗</button></div>
   </header>
   <main class="workbench">
@@ -22,11 +22,19 @@
           <label class="field"><span id="model-label" data-i18n="modelId">Model ID</span><input id="model" type="text" autocomplete="off" placeholder="Exact model ID"></label>
           <label class="field" id="compat-url-field" hidden><span data-i18n="baseUrl">Endpoint base URL</span><input id="compat-base-url" type="url" autocomplete="off" placeholder="http://127.0.0.1:8000/v1"></label>
           <label class="field" id="local-device-field" hidden><span data-i18n="device">Local device</span><select id="local-device"><option value="cpu">CPU</option><option value="mps">MPS</option><option value="cuda">CUDA</option></select></label>
+          <div id="local-options" hidden>
+            <label class="field"><span data-i18n="localRuntime">Local runtime</span><select id="local-runtime"><option value="auto" data-i18n="localAuto">Auto · inspect checkpoint</option><option value="transformers">Transformers</option><option value="mlx">MLX · Apple silicon</option></select></label>
+            <label class="field"><span data-i18n="localPromptMode">Prompt rendering</span><select id="local-prompt-mode"><option value="auto" data-i18n="promptAuto">Auto · native template, otherwise plain</option><option value="native" data-i18n="promptNative">Native chat template required</option><option value="plain" data-i18n="promptPlain">Plain completion · base model</option></select></label>
+            <button id="check-local" class="text-button" type="button" data-i18n="checkLocal">Check checkpoint</button>
+            <p id="local-check" class="help" role="status"></p>
+          </div>
           <p id="key-status" class="help"></p>
         </div>
         <label class="field" id="fixture-field"><span data-i18n="demoCase">Demo case</span><select id="fixture-case"><option value="normal" data-i18n="case_normal">Consecutive utterances → yield</option><option value="redundant" data-i18n="case_redundant">Repeat the same utterance</option><option value="immediate-yield" data-i18n="case_yield">Yield immediately</option><option value="malformed" data-i18n="case_malformed">Malformed JSON</option><option value="fake-user" data-i18n="case_fake">Fabricated human role</option><option value="overtalk" data-i18n="case_overtalk">Continue until the cap</option></select></label>
         <div class="divider"></div>
         <label class="switch-row"><span><span data-i18n="proactive">Start before the human</span><small data-i18n="proactiveHelp">Wake once at session_open</small></span><input id="proactive" type="checkbox" checked role="switch"></label>
+        <label class="field typing-mode-field"><span data-i18n="typingMode">When the human types</span><select id="typing-mode"><option value="interrupt" data-i18n="modeInterrupt">Interrupt generation</option><option value="presence" data-i18n="modePresence">Share typing presence</option></select></label>
+        <p id="typing-mode-help" class="help"></p>
         <label class="field"><span data-i18n="outputFormat">Output format</span><select id="structured"><option value="false" data-i18n="promptOnly">Prompt only / observe format errors</option><option value="true" data-i18n="schema">JSON Schema / constrain the format</option></select></label>
         <label class="field" id="anthropic-mode-field" hidden><span data-i18n="anthropicMode">Claude constraint method</span><select id="anthropic-mode"><option value="json_schema" data-i18n="nativeSchema">Native JSON Schema</option><option value="tool" data-i18n="forcedTool">Forced tool (separate condition)</option></select></label>
         <p id="constraint-help" class="help"></p>
@@ -54,7 +62,8 @@
         <div class="empty-state" id="empty-state"><span class="empty-mark" aria-hidden="true">∴</span><h3 data-i18n="emptyTitle">It is nobody's turn yet.</h3><p data-i18n="emptyBody">Either person can begin. Make room for a different rhythm.</p><span class="empty-caption">EMIT ≠ YIELD</span></div>
       </div>
       <div class="composer-area">
-        <div class="floor-controls"><label><input id="typing-interrupt" type="checkbox" checked><span data-i18n="typingInterrupt">Interrupt when typing</span></label><div><button id="wake" class="text-button" disabled data-i18n="wake">Resume</button><button id="stop" class="text-button stop" disabled data-i18n="stop">■ Stop</button></div></div>
+        <div class="presence-bar" id="presence-bar" role="status" aria-live="polite" hidden><span id="human-presence"></span><span id="assistant-presence"></span></div>
+        <div class="floor-controls"><span id="active-typing-mode" class="active-mode"></span><div><button id="wake" class="text-button" disabled data-i18n="wake">Resume</button><button id="stop" class="text-button stop" disabled data-i18n="stop">■ Stop</button></div></div>
         <form id="composer" class="composer"><label class="sr-only" for="message" data-i18n="humanMessage">Human message</label><textarea id="message" rows="2" maxlength="8000" data-i18n-placeholder="messagePlaceholder" placeholder="You can speak in the middle, too." disabled></textarea><button id="send" class="send-button" type="submit" aria-label="Send message" data-i18n-aria="send" disabled>↑</button></form>
         <div class="composer-bottom"><label><input id="auto-reply" type="checkbox" checked><span data-i18n="autoReply">Wake model after sending</span></label><span data-i18n="keyboardHelp">Enter to send / Shift + Enter for a new line</span></div>
       </div>

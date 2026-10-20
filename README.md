@@ -25,6 +25,8 @@ Open **http://127.0.0.1:8765**. Windows: `py -3 -m turnless` or `run.bat`. macOS
 3. Disable **Wake model after sending** to record consecutive human messages.
 4. Click **Observe sequence** beside a yield/stop, or select an individual utterance. Choose an observation and export JSONL.
 
+For a contrasting condition, select **When the human types → Share typing presence** before starting a new experiment. The assistant keeps generating, while both participants receive activity information. The composer shows **You are typing… / Assistant is composing…**; the model receives only a typing boolean at the next inference, never the unsent draft.
+
 **The demo is a deterministic fixture, not evidence of LLM behavior.** Its repetition, malformed JSON, fabricated-role, and cap-stop cases are deliberately injected failures.
 
 English is the default UI. Use the header selector for Japanese; the choice persists in that browser. **Conversation language is a separate experiment setting**, under Context, prompt & budget. Switching UI language does not change prompts, stored utterances, or the active experiment.
@@ -49,7 +51,7 @@ All backends use the same settings, request receipts, result contract, protocol 
 | Mistral | Fixed Chat Completions endpoint | `response_format` | `MISTRAL_API_KEY` |
 | Custom compatible server | User-selected Chat Completions base URL | `response_format`, if supported | `OPENAI_COMPAT_API_KEY`, optional for local servers |
 | Ollama | Loopback `/api/chat` | `format` | None |
-| Local Hugging Face | Checkpoint directory + native chat template | Prompt only | None |
+| Local checkpoint | Transformers or MLX; native chat template or plain completion | Prompt only | None |
 
 Enter an **exact model ID you can access**, or a local checkpoint directory. Schema support depends on the selected model and server. Unsupported requests fail visibly; there are no silent fallbacks or retries. The Gemini and Mistral presets have fixed endpoints and separate credentials. Custom endpoints accept HTTPS or loopback HTTP.
 
@@ -57,20 +59,24 @@ Credentials remain server-side and are never part of settings, browser responses
 
 The custom endpoint default can be selected with `--compat-base-url`. Ollama defaults to `http://127.0.0.1:11434`; `OLLAMA_HOST` may select another loopback HTTP endpoint. Redirects are rejected. A single custom credential is used for the custom endpoint, so select it for the intended destination.
 
-### Offline Hugging Face checkpoint
+### Offline local checkpoint
 
-Install the optional dependencies only on the machine doing local inference:
+Install the optional dependencies for the checkpoint's runtime on the inference machine:
 
 ```sh
 python3 -m pip install '.[local]'
+# For MLX checkpoints on Apple silicon instead:
+python3 -m pip install '.[mlx]'
 HF_HUB_OFFLINE=1 python3 -m turnless
 ```
 
-Choose **Hugging Face · offline directory**, enter an existing checkpoint directory, and select CPU, MPS, or CUDA. On PowerShell, set `$env:HF_HUB_OFFLINE = "1"` before starting Python.
+Choose **Local checkpoint · Transformers / MLX**, enter an existing directory, and press **Check checkpoint**. This checks metadata without loading weights. On PowerShell, set `$env:HF_HUB_OFFLINE = "1"` before starting Python.
 
-The loader uses `local_files_only=True` and `trust_remote_code=False`. It does not download Hub model IDs or install templates. A checkpoint needs a compatible native chat template; unsupported roles/templates fail explicitly. Template rendering is followed by tokenization with `add_special_tokens=False`. Generation is greedy, with one beam and one sequence. No device fallback occurs.
+- **Runtime Auto** selects MLX for its quantization configuration (`bits` / `group_size`, without a Transformers `quant_method`); otherwise it selects Transformers. Choose MLX explicitly for an unquantized MLX checkpoint. MLX uses Metal; CPU / MPS / CUDA applies to Transformers. MLX quantization cannot be loaded through Transformers simply by selecting MPS.
+- **Prompt Auto** uses the native chat template when present; otherwise it uses a recorded, versioned plain completion prompt. This lets base models such as GPT-2 start without inventing a native template. **Native** requires a template; **Plain** explicitly uses the completion convention. A base model may load and generate successfully while failing the JSON protocol.
+- Inputs are never silently truncated. If a known context window cannot hold the requested output, the effective output allowance is capped to the remaining space and recorded. An input that already fills the window fails with an actionable error.
 
-Local loading and generation are serialized across sessions. Models are cached by resolved directory and device until the process exits; restart after changing a checkpoint in place or to release cached models. Cancellation is checked before loading/generation and while waiting for the local lock. Running generation is not interrupted; its stale output is discarded by the engine. EOS, token-limit stops, and other stops are recorded separately. Greedy decoding does not guarantee bitwise reproducibility across devices or library versions.
+Loaders require a local directory, use offline tokenizer loading and `trust_remote_code=False`, and never download a Hub ID. Native templates are tokenized without adding special tokens twice. Generation is greedy. Local loading and generation are serialized; only the most recently selected checkpoint is cached. Restart after modifying weights in place or to release the cache. Cancellation is checked before loading, while waiting, and between generated tokens; loading and a running compute step may still need to finish. EOS, output limits and cancellation remain separate outcomes. gpt-oss uses only its public final channel; private reasoning is not persisted. Details: [backend contracts](docs/backends.md).
 
 ### Output constraints
 
@@ -92,7 +98,11 @@ One inference produces one decision. `emit` publishes an utterance and requests 
 
 `delay_ms` is a wait **after inference returns**, from 0 to 5000 ms. After the first utterance, the applied wait is the larger of the model's proposal and the configured minimum gap. Both values are recorded.
 
-Typing, submitting a message, and stopping invalidate the current epoch. Late results are retained as discarded output and never published. Already published utterances remain in history. One inference worker runs per session; pending wake requests are coalesced to the latest history.
+**Interrupt generation** is the default typing mode: typing invalidates the current epoch. **Share typing presence** leaves generation running and adds recent human activity to the next request's harness state. Both modes show real assistant activity (queued, generating, or waiting to publish), not hidden thought. Mode selection is fixed for a session and saved in JSONL.
+
+Typing activity is throttled to at most one update per second. The UI clears it after two idle seconds, blur, or sending; the server's three-second lease handles lost tabs/connections. Only transitions are logged, with fresh presence snapshots in requests. Presence is not an utterance or a wake trigger. An in-flight request cannot see later activity; ending typing never wakes a model that yielded.
+
+Submitting a message or pressing Stop still invalidates the current epoch in both modes. Late public results are retained as discarded output and never published. Already published utterances remain in history. One inference worker runs per session; pending wake requests are coalesced to the latest history.
 
 Upstream inference cancellation and billing cessation are **not guaranteed**. A synchronous HTTP call may delay the next inference until it returns or times out. HTTP I/O timeout is 60 seconds; the 120-second cycle budget is checked between calls, not a hard deadline for running inference. Default limits: five utterances per cycle and 40 calls per session. Yield itself consumes a call.
 
@@ -124,10 +134,12 @@ The server binds only to loopback, checks Host and API tokens, serves a CSP, and
 
 ## Validation and research status
 
-See [validation](docs/validation.md) for tested versions, checks, and limitations. Offline unit/HTTP tests verify protocol behavior and adapters with synthetic responses. An opt-in CPU integration test creates a tiny synthetic checkpoint locally to exercise real Transformers loading, native templating, and EOS detection, without downloads:
+See [v0.4 validation](docs/validation-v0.4.md) for tested versions, checks, and limitations. Offline unit/HTTP tests use synthetic responses. Opt-in integrations create tiny checkpoints locally to exercise Transformers native/plain prompts and MLX quantized loading with EOS detection, without downloads:
 
 ```sh
 TURNLESS_TEST_LOCAL=1 HF_HUB_OFFLINE=1 python3 -m unittest discover -s tests -p test_offline_checkpoint.py -v
+# Apple silicon + MLX:
+TURNLESS_TEST_MLX=1 HF_HUB_OFFLINE=1 python3 -m unittest discover -s tests -p test_offline_checkpoint.py -v
 ```
 
 These checks do not establish model quality or hosted-provider reliability. The legacy `examples/` traces remain v0.1 fixtures. Private pre-release exploratory logs are not included in the public repository and are not a benchmark. The initial research task is to distinguish useful continuation, good silence, and uncertain cases using explicit observer judgments and controlled scenarios.
@@ -136,7 +148,8 @@ These checks do not establish model quality or hosted-provider reliability. The 
 
 ```text
 turnless/catalog.py       backend capabilities and constraint identities
-turnless/providers.py     factory, transports, strict extraction, offline HF
+turnless/providers.py     factory, transports, strict extraction, offline HF/MLX
+turnless/local_models.py  checkpoint metadata, local prompt/output conventions
 turnless/protocol.py      decisions, settings, prompt construction
 turnless/engine.py        serial inference, epochs, publication, JSONL
 turnless/provenance.py    source/version receipts

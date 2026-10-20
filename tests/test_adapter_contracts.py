@@ -128,8 +128,10 @@ class AdapterContracts(unittest.TestCase):
                 self.assertTrue(callable(create_provider(settings, keys).generate))
         with tempfile.TemporaryDirectory() as tmp:
             app = App(Path(tmp), gemini_key="mock", mistral_key="mock")
+            Path(tmp, "config.json").write_text("{}")
             for backend in ("gemini", "mistral", "local"):
-                s = app.create({"provider": backend, "model": "mock", "consent": True, "proactive": False})
+                s = app.create({"provider": backend, "model": tmp if backend == "local" else "mock",
+                                "consent": True, "proactive": False})
                 s.close()
                 s.worker.join(1)
 

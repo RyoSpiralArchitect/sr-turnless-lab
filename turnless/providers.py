@@ -17,6 +17,7 @@ from typing import Any, Protocol
 
 from .catalog import ADAPTER_VERSION, BACKENDS, constraint_mode
 from .protocol import SCHEMA, Settings, _validate_compat_base_url
+from .local_models import checkpoint_config, resolve_runtime, render_prompt, output_allowance, public_output
 
 
 class ProviderError(RuntimeError):
@@ -297,12 +298,31 @@ class OllamaProvider(HTTPProvider):
                            finish_reason=stop, public_response={"content": raw, "done": data.get("done"), "done_reason": stop})
 
 
-_LOCAL_MODELS: dict[tuple[str, str], tuple[Any, Any]] = {}
+_LOCAL_MODELS: dict[tuple[str, str], tuple[Any, ...]] = {}
 _LOCAL_LOCK = threading.Lock()
 
 
+class _CancelGeneration:
+    def __init__(self, cancel):
+        self.cancel = cancel
+
+    def __call__(self, input_ids, scores, **kwargs):
+        return self.cancel.is_set()
+
+
+def _local_public_output(text, model_type):
+    try:
+        raw, metadata = public_output(text, model_type)
+        return raw, metadata, None
+    except ValueError as exc:
+        # Keep usage and termination even when a token cap precedes any final.
+        # An extraction failure must never persist the private candidate.
+        return "", {"output_extraction": "omitted", "private_reasoning_omitted": True,
+                    "public_extraction_error": str(exc)}, str(exc)
+
+
 class LocalHFProvider:
-    """Explicit local directories, native chat templates, greedy generation.
+    """Explicit local directories, native or plain prompts, greedy generation.
 
     Both loading and inference are serialized across sessions. local_files_only
     and trust_remote_code=False are explicit; HF_HUB_OFFLINE=1 is supported but
@@ -330,6 +350,7 @@ class LocalHFProvider:
                 "messages": [{"role": "system", "content": instructions}, {"role": "user", "content": payload}],
                 "generation": {"do_sample": False, "num_beams": 1, "num_return_sequences": 1,
                                "max_new_tokens": settings.max_output_tokens},
+                "prompt_mode": settings.local_prompt_mode, "context_policy": "cap_output_only",
                 "local_files_only": True, "trust_remote_code": False}
 
     def generate(self, instructions: str, payload: str, settings: Settings,
@@ -345,34 +366,38 @@ class LocalHFProvider:
             if cancel.is_set():
                 raise ProviderError("cancelled before local load")
             if cache_key not in _LOCAL_MODELS:
+                # Keep at most one checkpoint resident across local sessions.
+                _LOCAL_MODELS.clear()
                 _LOCAL_MODELS[cache_key] = self._load(path, settings.local_device)
             tokenizer, model = _LOCAL_MODELS[cache_key]
             if cancel.is_set():
                 raise ProviderError("cancelled before local generation")
-            messages = [{"role": "system", "content": instructions}, {"role": "user", "content": payload}]
             try:
                 # A template already supplies special tokens. Do not add them twice.
-                prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-                inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False).to(settings.local_device)
-                output = model.generate(**inputs, max_new_tokens=settings.max_output_tokens,
-                                        do_sample=False, num_beams=1, num_return_sequences=1,
-                                        return_dict_in_generate=False)
+                prompt, metadata = render_prompt(tokenizer, instructions, payload, settings.local_prompt_mode)
+                inputs = tokenizer(prompt, return_tensors="pt",
+                                   add_special_tokens=metadata["prompt_mode"] == "plain").to(settings.local_device)
                 n_in = int(inputs["input_ids"].shape[1])
+                config = model.config.to_dict()
+                allowance, limits = output_allowance(config, n_in, settings.max_output_tokens)
+                output = model.generate(**inputs, max_new_tokens=allowance,
+                                        do_sample=False, num_beams=1, num_return_sequences=1,
+                                        return_dict_in_generate=False, stopping_criteria=[_CancelGeneration(cancel)])
                 generated = output[0][n_in:]
                 n_out = int(output.shape[1] - n_in)
-                text = tokenizer.decode(generated, skip_special_tokens=True)
+                text = tokenizer.decode(generated, skip_special_tokens=config.get("model_type") != "gpt_oss")
+                text, extraction, extraction_error = _local_public_output(text, config.get("model_type"))
                 eos = getattr(model.generation_config, "eos_token_id", None)
                 eos_ids = eos if isinstance(eos, (list, tuple)) else [eos] if eos is not None else []
                 ended = n_out > 0 and int(generated[-1]) in eos_ids
-                finish = "eos" if ended else "length" if n_out >= settings.max_output_tokens else "other_stop"
-                status = "completed" if ended else "incomplete"
-                template = tokenizer.get_chat_template()
-                metadata = {"adapter_version": ADAPTER_VERSION,
-                            "chat_template_sha256": hashlib.sha256(template.encode()).hexdigest(),
-                            "rendered_prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+                finish = "cancelled" if cancel.is_set() else "eos" if ended else "length" if n_out >= allowance else "other_stop"
+                ended = ended and not cancel.is_set()
+                status = ("invalid_response" if extraction_error else "completed") if ended else "incomplete"
+                metadata.update({"adapter_version": ADAPTER_VERSION, "runtime": "transformers",
+                            **limits, **extraction,
                             "input_token_ids_sha256": hashlib.sha256(json.dumps(inputs["input_ids"].tolist()).encode()).hexdigest(),
                             "device": str(model.device), "eos_token_ids": eos_ids,
-                            "generation_config": model.generation_config.to_dict()}
+                            "generation_config": model.generation_config.to_dict()})
                 metadata["libraries"] = {}
                 for name in ("transformers", "torch", "tokenizers"):
                     try:
@@ -382,10 +407,103 @@ class LocalHFProvider:
             except Exception as exc:
                 raise ProviderError(f"Local inference failed: {type(exc).__name__}: {exc}") from exc
             return ModelResult(text, {"input_tokens": n_in, "output_tokens": n_out}, model=path,
-                               status=status, error=None if ended else "local generation stopped without EOS: " + finish,
+                               status=status, error=extraction_error if ended else "local generation stopped without EOS: " + finish,
                                finish_reason=finish, metadata=metadata)
         finally:
             _LOCAL_LOCK.release()
+
+
+class LocalMLXProvider:
+    """MLX weights stay in MLX. Explicit paths and tokenizer loading stay offline."""
+    def _load(self, path):
+        # Check again immediately before MLX's loader, so a Hub ID never reaches it.
+        checkpoint_config(path)
+        try:
+            from mlx_lm import load
+        except ImportError as exc:
+            raise ProviderError("Install MLX dependencies on Apple silicon: pip install '.[mlx]'") from exc
+        try:
+            model, tokenizer, config = load(path, tokenizer_config={
+                "local_files_only": True, "trust_remote_code": False}, return_config=True)
+            return tokenizer, model, config
+        except Exception as exc:
+            raise ProviderError(f"Local MLX load failed: {type(exc).__name__}: {exc}") from exc
+
+    def describe_request(self, instructions, payload, settings):
+        return {"adapter_version": ADAPTER_VERSION, "transport": "mlx", "constraint_mode": "prompt_only",
+                "model_directory": str(Path(settings.model).expanduser().resolve()), "device": "metal",
+                "messages": [{"role": "system", "content": instructions}, {"role": "user", "content": payload}],
+                "generation": {"temperature": 0, "max_new_tokens": settings.max_output_tokens},
+                "prompt_mode": settings.local_prompt_mode, "context_policy": "cap_output_only",
+                "local_files_only": True, "trust_remote_code": False}
+
+    def generate(self, instructions, payload, settings, cancel):
+        if settings.structured:
+            raise ProviderError("Local MLX supports Prompt only.")
+        path = str(Path(settings.model).expanduser().resolve())
+        key = (path, "mlx")
+        while not _LOCAL_LOCK.acquire(timeout=0.1):
+            if cancel.is_set():
+                raise ProviderError("cancelled while waiting for local inference")
+        try:
+            if cancel.is_set():
+                raise ProviderError("cancelled before local load")
+            if key not in _LOCAL_MODELS:
+                _LOCAL_MODELS.clear()
+                _LOCAL_MODELS[key] = self._load(path)
+            tokenizer, model, config = _LOCAL_MODELS[key]
+            if cancel.is_set():
+                raise ProviderError("cancelled before local generation")
+            from mlx_lm import stream_generate
+            from mlx_lm.sample_utils import make_sampler
+            prompt, metadata = render_prompt(tokenizer, instructions, payload, settings.local_prompt_mode)
+            ids = tokenizer.encode(prompt, add_special_tokens=metadata["prompt_mode"] == "plain")
+            allowance, limits = output_allowance(config, len(ids), settings.max_output_tokens)
+            # Pass token IDs to avoid a second, implicit BOS insertion by MLX-LM.
+            generated = []
+            finish = "other_stop"
+            stream = stream_generate(model, tokenizer, ids, max_tokens=allowance, sampler=make_sampler(temp=0))
+            try:
+                for part in stream:
+                    generated.append(part.token)
+                    if cancel.is_set():
+                        finish = "cancelled"
+                        break
+                    if part.finish_reason:
+                        finish = ("eos" if part.token in tokenizer.eos_token_ids else "other_stop") \
+                            if part.finish_reason == "stop" else part.finish_reason
+            finally:
+                stream.close()
+            text = tokenizer.decode(generated, skip_special_tokens=config.get("model_type") != "gpt_oss")
+            text, extraction, extraction_error = _local_public_output(text, config.get("model_type"))
+            metadata.update({"adapter_version": ADAPTER_VERSION, "runtime": "mlx", "device": "metal",
+                             **limits, **extraction, "eos_token_ids": sorted(tokenizer.eos_token_ids),
+                             "input_token_ids_sha256": hashlib.sha256(json.dumps([ids]).encode()).hexdigest(),
+                             "libraries": {name: importlib.metadata.version(name) for name in ("mlx", "mlx-lm", "transformers")}})
+            ended = finish == "eos"
+            return ModelResult(text, {"input_tokens": len(ids), "output_tokens": len(generated)}, model=path,
+                               status=("invalid_response" if extraction_error else "completed") if ended else "incomplete",
+                               finish_reason=finish,
+                               error=extraction_error if ended else "local generation stopped without EOS: " + finish,
+                               metadata=metadata)
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise ProviderError(f"Local MLX inference failed: {type(exc).__name__}: {exc}") from exc
+        finally:
+            _LOCAL_LOCK.release()
+
+
+class LocalProvider:
+    def _backend(self, settings):
+        runtime = resolve_runtime(checkpoint_config(settings.model), settings.local_runtime)
+        return LocalMLXProvider() if runtime == "mlx" else LocalHFProvider()
+
+    def describe_request(self, instructions, payload, settings):
+        return self._backend(settings).describe_request(instructions, payload, settings)
+
+    def generate(self, instructions, payload, settings, cancel):
+        return self._backend(settings).generate(instructions, payload, settings, cancel)
 
 
 def create_provider(settings: Settings, credentials: dict[str, str] | None = None,
@@ -397,7 +515,7 @@ def create_provider(settings: Settings, credentials: dict[str, str] | None = Non
     if settings.provider == "fixture":
         return FixtureProvider()
     if settings.provider == "local":
-        return LocalHFProvider()
+        return LocalProvider()
     if settings.provider == "ollama":
         return OllamaProvider(ollama_url)
     if settings.provider == "openai":

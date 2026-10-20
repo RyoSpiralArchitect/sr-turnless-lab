@@ -17,6 +17,7 @@ from .engine import Session
 from .protocol import TAGS, Settings, _validate_compat_base_url
 from .providers import create_provider
 from .catalog import BACKENDS
+from .local_models import inspect_checkpoint
 from . import __version__
 
 WEB = Path(__file__).parent / "web"
@@ -37,6 +38,8 @@ class App:
 
     def create(self, data: dict[str, Any]) -> Session:
         settings = Settings.from_dict(data)
+        if settings.provider == "local":
+            inspect_checkpoint(settings.model, settings.local_runtime, settings.local_prompt_mode)
         with self.lock:
             # Retire abandoned tabs. Disk traces remain available locally.
             expired = [sid for sid, s in self.sessions.items()
@@ -148,12 +151,22 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 if not isinstance(data, dict):
                     raise ValueError("JSON object required")
                 route = urllib.parse.urlparse(self.path).path
-                if route == "/api/session":
+                if route == "/api/local-model":
+                    if set(data) - {"model", "local_runtime", "local_prompt_mode"}:
+                        raise ValueError("Unknown local model inspection field.")
+                    self._json(200, inspect_checkpoint(data.get("model", ""), data.get("local_runtime", "auto"),
+                                                      data.get("local_prompt_mode", "auto")))
+                    return
+                elif route == "/api/session":
                     session = app.create(data)
                 else:
                     session = app.get(data.get("session", ""))
                     if route == "/api/human":
                         session.human(data.get("text", ""), data.get("auto_reply", True))
+                    elif route == "/api/typing":
+                        if set(data) != {"session", "active"}:
+                            raise ValueError("Typing accepts only session and active; do not send draft text.")
+                        session.typing(data["active"])
                     elif route == "/api/interrupt":
                         session.interrupt(data.get("reason", "operator_stop"))
                     elif route == "/api/wake":

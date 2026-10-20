@@ -49,7 +49,7 @@ python3 -m turnless.analyze "examples/*.jsonl"
 | Mistral | 固定のChat Completions経路 | `response_format` | `MISTRAL_API_KEY` |
 | 汎用互換サーバー | 指定したBase URLのChat Completions | 対応していれば `response_format` | `OPENAI_COMPAT_API_KEY`。ローカルでは不要な場合あり |
 | Ollama | loopbackの `/api/chat` | `format` | 不要 |
-| ローカルHF | チェックポイントのディレクトリとnative chat template | Prompt only | 不要 |
+| ローカルモデル | Transformers / MLX、native chat template / plain completion | Prompt only | 不要 |
 
 利用可能な**正確なモデルID**、またはローカルのディレクトリを指定します。Schema対応はモデルと接続先によります。未対応の要求はエラーとして残し、別方式への自動切替や再試行は行いません。GeminiとMistralは専用の接続先・認証設定を使います。汎用互換のBase URLはHTTPSまたはloopback HTTPに限定します。
 
@@ -59,18 +59,22 @@ python3 -m turnless.analyze "examples/*.jsonl"
 
 ### HF_HUB_OFFLINE=1 とローカルモデル
 
-ローカル推論を行う端末だけに追加依存を導入します。
+ローカル推論を行う端末に、チェックポイントの形式に合う追加依存を導入します。
 
 ```sh
 python3 -m pip install '.[local]'
+# Apple siliconのMLXチェックポイントには、代わりにこちら:
+python3 -m pip install '.[mlx]'
 HF_HUB_OFFLINE=1 python3 -m turnless
 ```
 
-「Hugging Face · offline directory」を選び、既存のチェックポイントのディレクトリと、CPU / MPS / CUDAを指定します。PowerShellでは起動前に `$env:HF_HUB_OFFLINE = "1"` を設定します。
+「Local checkpoint · Transformers / MLX」で既存のディレクトリを指定し、「チェックポイントを確認」を押します。重みを読み込まず、メタデータを確認します。PowerShellでは起動前に `$env:HF_HUB_OFFLINE = "1"` を設定します。
 
-`local_files_only=True`、`trust_remote_code=False` で読み込み、HubモデルIDからのダウンロードやtemplateの自動追加はしません。モデル側に対応したchat templateが必要です。未対応の役割・templateは明示的なエラーになります。template適用後のtokenizeには `add_special_tokens=False` を使い、特殊トークンの重複を防ぎます。生成はgreedy、1 beam、1 sequenceです。デバイスの自動変更はしません。
+- **実行基盤の自動選択**は、MLXの量子化設定（`bits` / `group_size` があり、Transformersの `quant_method` がない形式）ならMLX、それ以外はTransformersです。非量子化MLXは明示的にMLXを選びます。MLXはMetalを使い、CPU / MPS / CUDAの選択はTransformers用です。MPSを選ぶだけではMLX形式をTransformersで読めません。
+- **プロンプトの自動選択**は、native chat templateがあればそれを使い、なければ版を記録したplain completionを使います。GPT-2などのベースモデルにも架空のnative templateを追加せず生成できます。Nativeではtemplateを必須にし、Plainではcompletion方式を明示的に選べます。読み込み・生成が成功しても、ベースモデルがJSONの指示に従うとは限りません。
+- 入力は黙って切り捨てません。既知のコンテキスト上限に収まるよう出力枠だけを制限し、要求値・実効値を記録します。入力自体が上限に達した場合は、短い実験で再開するためのエラーを表示します。
 
-モデルの読込と生成はセッション間でも直列化します。同じ解決済みディレクトリとデバイスのモデルはプロセス内で再利用します。チェックポイントを上書きした場合やメモリを解放する場合はサーバーを再起動してください。キャンセルは読込・生成の前とロック待機中に確認します。実行中の生成は中断せず、古い結果を公開前に破棄します。EOS終了、出力上限、その他の停止を区別して記録します。greedyでも、異なるデバイスやライブラリ版の間でビット単位の再現性を保証するものではありません。
+既存のローカルディレクトリを必須とし、tokenizerはオフライン、`trust_remote_code=False` で読み込みます。Hub IDからのダウンロードはしません。native templateの特殊トークンは二重に追加せず、生成はgreedyです。読込・生成はセッション間でも直列化し、最後に選んだ1モデルだけをキャッシュします。重みを上書きした場合やキャッシュ解放には再起動が必要です。キャンセルは読込前・ロック待機中・生成トークンの間で確認しますが、読込や実行中の計算ステップは完了を待つ場合があります。EOS・出力上限・キャンセルを区別します。gpt-ossでは公開のfinalチャネルだけを取り出し、非公開の推論内容は保存しません。詳細は [バックエンド契約](docs/backends.md) を参照してください。
 
 ### 出力形式
 
@@ -92,7 +96,11 @@ HF_HUB_OFFLINE=1 python3 -m turnless
 
 `delay_ms` は**推論結果を受け取った後**の待機で、0〜5000ms。2発話目以降は提案値と最低発話間隔の大きい方を適用し、両方を記録します。
 
-入力開始、送信、停止で現在のepochを無効にします。遅延応答は破棄として保存し、公開しません。公開済みの発話は履歴に残ります。1セッション1ワーカーで、待機中の再開要求は最新の履歴にまとめます。
+「人間が入力を始めたら」で2つの条件を選べます。既定の **生成に割り込む** は入力開始で現在のepochを無効にします。対照となる **入力中の状態を伝える** は生成を継続し、次の推論に人間の入力中状態だけを渡します。下書き本文は送信するまで送りません。どちらも画面に「あなたが入力中…」「アシスタントが発話を準備中…」を表示します。後者は実行待ち・生成・公開待ちの状態であり、内面の思考を示すものではありません。モードはセッションごとに固定し、JSONLに残します。
+
+入力中の通知は最大毎秒1回。2秒間入力がないとき、フォーカスを外したとき、送信時に解除します。タブや接続が失われても、サーバー側では3秒で失効します。ログは状態の切替を残し、requestにその時点の状態を保存します。入力中は発話やwakeではなく、実行中の推論にも後から差し込めません。入力をやめても、yield済みのモデルは自動再開しません。
+
+送信と停止は両モードで現在のepochを無効にします。遅延した公開候補は破棄として保存し、公開しません。公開済みの発話は履歴に残ります。1セッション1ワーカーで、待機中の再開要求は最新の履歴にまとめます。
 
 **上流の推論中断や課金停止は保証しません。** 同期HTTPが返るかタイムアウトするまで次の推論を待つ場合があります。HTTP I/Oは60秒、サイクル予算は120秒ですが、後者は推論間での確認です。既定はサイクルごとに5発話、セッション全体で40呼び出し。yield判断も1回を消費します。
 
@@ -124,10 +132,12 @@ HF_HUB_OFFLINE=1 python3 -m turnless
 
 ## 検証範囲と研究段階
 
-検証環境と制限は [validation](docs/validation.md) に記載します。通常のテストは合成応答を使うオフライン検証です。追加のCPU結合テストは、小さな検証用チェックポイントをローカルで作り、実際のTransformers読込・template適用・EOS検出を確認します。ダウンロードは行いません。
+検証環境と制限は [v0.4の検証記録](docs/validation-v0.4.md) に記載します。通常のテストは合成応答を使うオフライン検証です。追加の結合テストでは、小さな検証用チェックポイントをローカルで作り、Transformersのnative/plain入力とMLX量子化の読込・EOS検出を確認します。ダウンロードは行いません。
 
 ```sh
 TURNLESS_TEST_LOCAL=1 HF_HUB_OFFLINE=1 python3 -m unittest discover -s tests -p test_offline_checkpoint.py -v
+# Apple silicon + MLX:
+TURNLESS_TEST_MLX=1 HF_HUB_OFFLINE=1 python3 -m unittest discover -s tests -p test_offline_checkpoint.py -v
 ```
 
 これらはモデルの会話品質やホストされたAPIの信頼性を示しません。`examples/` は元のv0.1固定デモとして保持しています。公開前の個人的な探索ログは公開リポジトリに含めず、ベンチマークとも扱いません。次の研究段階は、具体的な場面と観測者判断によって「良い継続」「良い沈黙」「判断が割れる例」を集めることです。

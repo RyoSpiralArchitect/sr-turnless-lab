@@ -59,6 +59,33 @@ class ServerTests(unittest.TestCase):
             self.call("/api/session", {}, token=False)
         self.assertEqual(ctx.exception.code, 403)
 
+    def test_typing_api_accepts_activity_but_rejects_draft_content(self):
+        with self.call("/api/session", {"proactive": False, "typing_mode": "presence"}) as response:
+            sid = json.load(response)["session_id"]
+        with self.call("/api/typing", {"session": sid, "active": True}) as response:
+            snapshot = json.load(response)
+        self.assertTrue(snapshot["presence"]["human_typing"])
+        self.assertEqual(snapshot["metrics"]["calls"], 0)
+        for data in ({"session": sid, "active": "yes"},
+                     {"session": sid, "active": True, "text": "private draft"}):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.call("/api/typing", data)
+            self.assertEqual(ctx.exception.code, 400)
+        with self.call("/api/export?session=" + sid) as response:
+            self.assertNotIn("private draft", response.read().decode())
+        self.call("/api/close", {"session": sid}).close()
+
+    def test_local_inspection_and_invalid_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "config.json").write_text('{"n_positions":1024,"model_type":"gpt2"}')
+            with self.call("/api/local-model", {"model": tmp}) as response:
+                info = json.load(response)
+            self.assertEqual(info["prompt_mode"], "plain")
+            self.assertFalse(info["weights_loaded"])
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("/api/session", {"provider": "local", "model": "/missing/checkpoint", "consent": True})
+        self.assertEqual(ctx.exception.code, 400)
+
     def test_rebinding_host_blocked(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self.call("/api/bootstrap", host="attacker.example")

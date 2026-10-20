@@ -38,6 +38,13 @@ def summarize(path: Path) -> dict[str, Any]:
         "source_sha256": start.get("provenance", {}).get("source_sha256"),
         "constraint_mode": start.get("constraint_mode", "legacy_unspecified"),
         "conversation_language": settings.get("conversation_language", "legacy_unspecified"),
+        "typing_mode": settings.get("typing_mode", "legacy_unspecified"),
+        "local_runtime": settings.get("local_runtime", "legacy_unspecified"),
+        "local_prompt_mode": settings.get("local_prompt_mode", "legacy_unspecified"),
+        "actual_local_runtimes": sorted({(e.get("metadata") or {}).get("runtime") for e in raw
+                                        if (e.get("metadata") or {}).get("runtime")}),
+        "actual_local_prompt_modes": sorted({(e.get("metadata") or {}).get("prompt_mode") for e in raw
+                                            if (e.get("metadata") or {}).get("prompt_mode")}),
         "policy": settings["policy"], "structured": settings["structured"],
         "max_utterances": settings["max_utterances"], "min_gap_ms": settings["min_gap_ms"],
         "proactive": settings["proactive"], "requests": requests,

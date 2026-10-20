@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 const t = window.I18N.t;
 let backends = [], lastSnapshot = null;
 const busyStates = new Set(["queued", "generating", "delaying"]);
-const visibleKinds = new Set(["utterance", "yield", "forced_stop", "interrupt", "pause", "wake", "protocol_error", "provider_error", "discard", "flag", "annotation", "session_open", "session_close", "harness_error"]);
+const visibleKinds = new Set(["utterance", "yield", "forced_stop", "interrupt", "pause", "wake", "typing", "protocol_error", "provider_error", "discard", "flag", "annotation", "session_open", "session_close", "harness_error"]);
 let token = "", sessionId = null, cursor = 0, status = "waiting", selected = null;
 let events = [], known = new Set(), openaiReady = false, providerReady = {}, compatHint = "", mutationChain = Promise.resolve();
 const storage = {
@@ -11,7 +11,9 @@ const storage = {
   set(key, value) { try { sessionStorage.setItem(key, value); } catch { /* storage may be disabled */ } },
   remove(key) { try { sessionStorage.removeItem(key); } catch { /* storage may be disabled */ } },
 };
-let typingSignaled = false, creating = false, sendPending = false, toastTimer, pollErrors = 0;
+let typingActive = false, typingLastSent = 0, typingTimer, creating = false, sendPending = false, toastTimer, pollErrors = 0;
+let localInspection = null;
+let pollPending = null;
 let annotationTargets = [], annotationScope = "event", annotationPending = false;
 const annotationDrafts = new Map();
 
@@ -276,6 +278,16 @@ function ingest(data) {
   $("message").disabled = status === "closed";
   $("send").disabled = status === "closed" || sendPending;
   $("export").disabled = false;
+  $("presence-bar").hidden = status === "closed";
+  const humanTyping = !!data.presence?.human_typing, assistantTyping = !!data.presence?.assistant_composing;
+  for (const [id, active, key] of [["human-presence", humanTyping, humanTyping ? "humanTyping" : "humanIdle"],
+    ["assistant-presence", assistantTyping, assistantTyping ? "assistantTyping" : "assistantIdle"]]) {
+    const label = t(key);
+    if ($(id).textContent !== label) $(id).textContent = label;
+    $(id).classList.toggle("is-typing", active);
+  }
+  $("active-typing-mode").textContent = t(data.settings.typing_mode === "presence" ? "modePresence" : "modeInterrupt");
+  $("active-typing-mode").title = t(data.settings.typing_mode === "presence" ? "presenceHelp" : "interruptHelp");
   if (additions.length) {
     rememberDraft();
     renderTrace();
@@ -284,10 +296,12 @@ function ingest(data) {
   }
 }
 function settings() {
-  return {provider: $("provider").value, model: $("model").value.trim(),
+  return {provider: $("provider").value, model: $("provider").value === "fixture" ? "" : $("model").value.trim(),
     compat_base_url: $("provider").value === "openai_compat" ? $("compat-base-url").value.trim() : "",
     conversation_language: $("conversation-language").value,
     anthropic_mode: $("anthropic-mode").value, local_device: $("local-device").value,
+    local_runtime: $("local-runtime").value, local_prompt_mode: $("local-prompt-mode").value,
+    typing_mode: $("typing-mode").value,
     fixture_case: $("fixture-case").value, structured: $("structured").value === "true",
     proactive: $("proactive").checked, policy: $("policy").value,
     max_utterances: Number($("max-utterances").value), min_gap_ms: Number($("min-gap").value),
@@ -306,6 +320,9 @@ function providerChanged() {
   $("compat-url-field").hidden = provider !== "openai_compat";
   $("compat-base-url").required = provider === "openai_compat";
   $("local-device-field").hidden = !local;
+  $("local-options").hidden = !local;
+  $("local-device").disabled = $("local-runtime").value === "mlx" || localInspection?.runtime === "mlx";
+  $("typing-mode-help").textContent = t($("typing-mode").value === "presence" ? "presenceHelp" : "interruptHelp");
   $("anthropic-mode-field").hidden = provider !== "anthropic";
   $("model-label").textContent = t(local ? "modelDirectory" : "modelId");
   $("model").placeholder = t(local ? "localPlaceholder" : "modelPlaceholder");
@@ -320,6 +337,32 @@ function providerChanged() {
   const mode = $("structured").value !== "true" ? "prompt_only"
     : provider === "anthropic" && $("anthropic-mode").value === "tool" ? "anthropic_forced_tool" : spec?.schema_mode;
   $("constraint-help").textContent = t(local ? "localConstraint" : fixture ? "fixtureConstraint" : "constraint", {mode});
+  if (localInspection) renderLocalInspection();
+}
+function renderLocalInspection() {
+  const info = localInspection;
+  $("local-check").textContent = t("localChecked", {
+    runtime: info.runtime, prompt: t(info.prompt_mode === "native" ? "promptNative" : "promptPlain"),
+    context: info.context_window ?? "?", library: info.library,
+    version: info.library_version || t("notInstalled")});
+}
+function resetLocalInspection() {
+  localInspection = null;
+  $("local-check").textContent = "";
+  providerChanged();
+}
+async function checkLocal() {
+  const input = {model: $("model").value.trim(), local_runtime: $("local-runtime").value,
+    local_prompt_mode: $("local-prompt-mode").value};
+  $("check-local").disabled = true;
+  try {
+    const info = await request("/api/local-model", input);
+    if (input.model !== $("model").value.trim() || input.local_runtime !== $("local-runtime").value
+      || input.local_prompt_mode !== $("local-prompt-mode").value) return;
+    localInspection = info;
+    providerChanged();
+  } catch (error) { $("local-check").textContent = error.message; }
+  finally { $("check-local").disabled = false; }
 }
 function localizeLiveView() {
   rememberDraft();
@@ -343,6 +386,11 @@ $("ui-language").addEventListener("change", () => {
 $("structured").addEventListener("change", providerChanged);
 $("anthropic-mode").addEventListener("change", providerChanged);
 $("provider").addEventListener("change", providerChanged);
+$("typing-mode").addEventListener("change", providerChanged);
+$("local-runtime").addEventListener("change", resetLocalInspection);
+$("local-prompt-mode").addEventListener("change", resetLocalInspection);
+$("model").addEventListener("input", resetLocalInspection);
+$("check-local").addEventListener("click", checkLocal);
 $("max-utterances").addEventListener("input", () => { $("max-value").value = $("max-utterances").value; });
 $("min-gap").addEventListener("input", () => { $("gap-value").value = $("min-gap").value + " ms"; });
 $("trace-filter").addEventListener("change", renderTrace);
@@ -351,7 +399,10 @@ $("settings-form").addEventListener("submit", async (event) => {
   if (creating) return;
   const config = settings();
   creating = true; $("start").disabled = true;
+  clearTimeout(typingTimer); typingActive = false; typingLastSent = 0;
   try {
+    // Drain the old poll before closing/pruning that session; pause new polls.
+    if (pollPending) await pollPending.catch(() => {});
     await enqueue(async () => {
       if (sessionId) {
         try { await request("/api/close", {session: sessionId}); } catch { /* stale prior server/session */ }
@@ -359,7 +410,7 @@ $("settings-form").addEventListener("submit", async (event) => {
       const data = await request("/api/session", config);
       sessionId = data.session_id; cursor = 0; selected = null; events = []; known = new Set();
       annotationScope = "event"; annotationTargets = []; annotationDrafts.clear();
-      typingSignaled = false;
+      clearTimeout(typingTimer); typingActive = false; typingLastSent = 0;
       $("conversation").replaceChildren();
       $("inspect").textContent = t("inspectHelp");
       $("selected-label").textContent = t("noneSelected");
@@ -371,12 +422,28 @@ $("settings-form").addEventListener("submit", async (event) => {
   } catch (error) { toast(error.message, true); }
   finally { creating = false; $("start").disabled = false; }
 });
-$("message").addEventListener("input", () => {
-  if (sessionId && $("typing-interrupt").checked && !typingSignaled && $("message").value && busyStates.has(status)) {
-    typingSignaled = true;
-    mutate("/api/interrupt", {reason: "human_typing"}).catch(error => toast(error.message, true));
+function stopTyping() {
+  clearTimeout(typingTimer);
+  if (!typingActive) return;
+  typingActive = false;
+  if (sessionId && status !== "closed") mutate("/api/typing", {active: false}).catch(() => {});
+}
+function signalTyping() {
+  if (!sessionId || creating || status === "closed") return;
+  if (!$("message").value) { stopTyping(); return; }
+  clearTimeout(typingTimer);
+  // Activity refreshes presence at most once per second; no draft ever leaves this field.
+  if (!typingActive || Date.now() - typingLastSent >= 1000) {
+    typingActive = true; typingLastSent = Date.now();
+    mutate("/api/typing", {active: true}).catch(error => { typingActive = false; toast(error.message, true); });
   }
-});
+  typingTimer = setTimeout(stopTyping, 2000);
+}
+$("message").addEventListener("input", signalTyping);
+$("message").addEventListener("compositionupdate", signalTyping);
+$("message").addEventListener("blur", stopTyping);
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopTyping(); });
+window.addEventListener("pagehide", stopTyping);
 $("message").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
     event.preventDefault(); $("composer").requestSubmit();
@@ -387,13 +454,14 @@ $("composer").addEventListener("submit", async (event) => {
   const text = $("message").value;
   if (!text.trim() || !sessionId || sendPending) return;
   const autoReply = $("auto-reply").checked;
-  sendPending = true; $("send").disabled = true; $("message").value = ""; typingSignaled = false;
+  sendPending = true; $("send").disabled = true; $("message").value = "";
+  clearTimeout(typingTimer); typingActive = false;
   try { await mutate("/api/human", {text, auto_reply: autoReply}); }
   catch (error) { if (!$("message").value) $("message").value = text; toast(error.message, true); }
   finally { sendPending = false; $("send").disabled = status === "closed"; $("message").focus(); }
 });
 $("stop").addEventListener("click", () => mutate("/api/interrupt", {reason: "operator_stop"}).then(() => toast(t("stopped"))).catch(error => toast(error.message, true)));
-$("wake").addEventListener("click", () => { typingSignaled = false; mutate("/api/wake").catch(error => toast(error.message, true)); });
+$("wake").addEventListener("click", () => { mutate("/api/wake").catch(error => toast(error.message, true)); });
 $("annotation-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const target = observationTarget(), value = $("tag").value;
@@ -442,15 +510,16 @@ $("export").addEventListener("click", async () => {
 });
 async function poll() {
   const sid = sessionId;
-  if (sid) {
+  if (sid && !creating) {
     try {
-      const data = await request(`/api/events?session=${sid}&after=${cursor}`);
+      pollPending = request(`/api/events?session=${sid}&after=${cursor}`);
+      const data = await pollPending;
       if (sid === sessionId) ingest(data);
       pollErrors = 0;
     } catch (error) {
       pollErrors++;
       if (pollErrors === 3) toast(t("reconnecting"), true);
-    }
+    } finally { pollPending = null; }
   }
   setTimeout(poll, pollErrors ? 1500 : 250);
 }
@@ -480,7 +549,8 @@ async function boot() {
           max_utterances: "max-utterances", min_gap_ms: "min-gap", call_budget: "call-budget",
           max_output_tokens: "max-tokens", context: "context", prompt_extra: "prompt-extra",
           compat_base_url: "compat-base-url", conversation_language: "conversation-language",
-          anthropic_mode: "anthropic-mode", local_device: "local-device", fixture_case: "fixture-case"};
+          anthropic_mode: "anthropic-mode", local_device: "local-device", fixture_case: "fixture-case",
+          local_runtime: "local-runtime", local_prompt_mode: "local-prompt-mode", typing_mode: "typing-mode"};
         for (const [key, id] of Object.entries(fields)) if (config[key] !== undefined) $(id).value = String(config[key]);
         $("proactive").checked = config.proactive;
         $("consent").checked = config.consent;

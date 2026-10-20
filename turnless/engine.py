@@ -19,6 +19,8 @@ from . import __version__
 from .catalog import constraint_mode
 from .provenance import source_identity
 
+TYPING_LEASE_SECONDS = 3.0
+
 
 @dataclass
 class Cycle:
@@ -43,6 +45,8 @@ class Session:
         self.status = "waiting"
         self.closed = False
         self.inflight = False
+        self._human_typing = False
+        self._typing_seen = 0.0
         self._current: Cycle | None = None
         self._pending: Cycle | None = None
         self.log_path: Path | None = None
@@ -112,6 +116,7 @@ class Session:
         with self.condition:
             if self.closed:
                 raise ValueError("experiment is closed")
+            self._set_typing(False, "message_sent")
             self._invalidate("human_message")
             self._event("utterance", source="human", speaker="human", text=text.strip(), epoch=self.epoch,
                         auto_reply_requested=auto_reply)
@@ -123,12 +128,48 @@ class Session:
             raise ValueError("invalid interrupt reason")
         with self.condition:
             if not self.closed:
+                if reason == "human_typing":
+                    self.typing(True)
+                    return
                 self._invalidate(reason)
                 self._event("pause", source="harness", reason=reason, epoch=self.epoch)
+
+    def _set_typing(self, active: bool, reason: str) -> None:
+        if active != self._human_typing:
+            self._event("typing", source="harness", actor="human", active=active,
+                        reason=reason, mode=self.settings.typing_mode, epoch=self.epoch,
+                        lease_ms=round(TYPING_LEASE_SECONDS * 1000))
+            self._human_typing = active
+
+    def _expire_typing(self) -> None:
+        if self._human_typing and time.monotonic() - self._typing_seen >= TYPING_LEASE_SECONDS:
+            self._set_typing(False, "idle_timeout")
+
+    def typing(self, active: bool) -> None:
+        """Accept activity only, never draft text. A heartbeat renews the lease."""
+        if type(active) is not bool:
+            raise ValueError("active must be boolean")
+        with self.condition:
+            if self.closed:
+                raise ValueError("experiment is closed")
+            self._expire_typing()
+            self._typing_seen = time.monotonic()
+            self._set_typing(active, "input_activity" if active else "input_stopped")
+            if active and self.settings.typing_mode == "interrupt" and self.status in ("queued", "generating", "delaying"):
+                self._invalidate("human_typing")
+                self._event("pause", source="harness", reason="human_typing", epoch=self.epoch)
+            self.condition.notify_all()
+
+    def _presence(self) -> dict[str, Any]:
+        self._expire_typing()
+        return {"human_typing": self._human_typing,
+                "observed_at_ms": round((time.monotonic() - self.started) * 1000),
+                "lease_ms": round(TYPING_LEASE_SECONDS * 1000)}
 
     def close(self) -> None:
         with self.condition:
             if not self.closed:
+                self._set_typing(False, "session_close")
                 self._invalidate("session_close")
                 self.closed, self.status = True, "closed"
                 self._event("session_close", source="harness", upstream_pending=self.inflight)
@@ -150,9 +191,12 @@ class Session:
     def _worker(self) -> None:
         while True:
             with self.condition:
-                self.condition.wait_for(lambda: self.closed or self._pending is not None)
+                self.condition.wait_for(lambda: self.closed or self._pending is not None, timeout=0.5)
+                self._expire_typing()
                 if self.closed:
                     return
+                if self._pending is None:
+                    continue
                 cycle = self._pending
                 self._pending = None
                 self._current = cycle
@@ -188,7 +232,8 @@ class Session:
                 if time.monotonic() - cycle.started > 120:
                     self._finish(cycle, "forced_stop", "cycle_time_budget")
                     return
-                instructions, payload = make_prompt(self.settings, self.events, cycle.trigger, cycle.emitted)
+                presence = self._presence()
+                instructions, payload = make_prompt(self.settings, self.events, cycle.trigger, cycle.emitted, presence)
                 if len(instructions) + len(payload) > 80_000:
                     self._finish(cycle, "forced_stop", "context_character_budget")
                     return
@@ -276,6 +321,8 @@ class Session:
     def snapshot(self, after: int = 0) -> dict[str, Any]:
         with self.lock:
             self.last_access = time.monotonic()
+            presence = self._presence()
+            presence["assistant_composing"] = self.status in ("queued", "generating", "delaying")
             count = lambda kind: sum(e["kind"] == kind for e in self.events)
             token_in = token_out = 0
             for e in self.events:
@@ -285,6 +332,7 @@ class Session:
                     token_out += usage.get("output_tokens", 0) or 0
             return {
                 "session_id": self.id, "status": self.status, "inflight": self.inflight,
+                "presence": presence,
                 "settings": self.settings.public(), "cursor": len(self.events),
                 "events": [e.copy() for e in self.events if e["seq"] > after],
                 "annotation_targets": observation_targets(self.events),
@@ -301,6 +349,7 @@ class Session:
 
     def export_jsonl(self) -> str:
         with self.lock:
+            self._expire_typing()
             data = [*self.events, {
                 "kind": "export_metadata", "session_id": self.id, "version": __version__,
                 "source_sha256": self.provenance["source_sha256"],

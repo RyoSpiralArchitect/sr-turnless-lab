@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-ADAPTER_VERSION = "2"
+ADAPTER_VERSION = "3"
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ BACKENDS = {
         Backend("openai_compat", "Custom · Chat Completions", "chat_completions", "chat_json_schema",
                 key_env="OPENAI_COMPAT_API_KEY"),
         Backend("ollama", "Ollama · local", "ollama", "ollama_format"),
-        Backend("local", "Hugging Face · offline directory", "transformers", "unsupported",
+        Backend("local", "Local checkpoint · Transformers / MLX", "local", "unsupported",
                 model_kind="directory"),
     )
 }

@@ -10,7 +10,7 @@ from .catalog import BACKENDS
 from .annotations import TAGS
 
 PROVIDERS = tuple(BACKENDS)
-PROTOCOL_VERSION = "1"
+PROTOCOL_VERSION = "2"
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -133,6 +133,9 @@ class Settings:
     conversation_language: str = "en"
     anthropic_mode: str = "json_schema"
     local_device: str = "cpu"
+    local_runtime: str = "auto"
+    local_prompt_mode: str = "auto"
+    typing_mode: str = "interrupt"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Settings":
@@ -154,6 +157,12 @@ class Settings:
             raise ValueError("anthropic_mode must be json_schema or tool")
         if obj.local_device not in ("cpu", "mps", "cuda"):
             raise ValueError("local_device must be cpu, mps or cuda")
+        if obj.local_runtime not in ("auto", "transformers", "mlx"):
+            raise ValueError("local_runtime must be auto, transformers or mlx")
+        if obj.local_prompt_mode not in ("auto", "native", "plain"):
+            raise ValueError("local_prompt_mode must be auto, native or plain")
+        if obj.typing_mode not in ("interrupt", "presence"):
+            raise ValueError("typing_mode must be interrupt or presence")
         if obj.fixture_case not in ("normal", "redundant", "immediate-yield", "malformed", "fake-user", "overtalk"):
             raise ValueError("unsupported fixture case")
         for name, lo, hi in (("max_utterances", 1, 12), ("min_gap_ms", 0, 3000),
@@ -185,7 +194,7 @@ class Settings:
 
 
 def make_prompt(settings: Settings, events: list[dict[str, Any]], trigger: str,
-                emitted: int) -> tuple[str, str]:
+                emitted: int, presence: dict[str, Any] | None = None) -> tuple[str, str]:
     # Only real public utterances are represented as speakers. Control events are
     # explicitly separate. Full prompt snapshots are traced for reproducibility.
     transcript = [
@@ -200,6 +209,12 @@ def make_prompt(settings: Settings, events: list[dict[str, Any]], trigger: str,
     instructions += "\nConversation language: " + {"en": "English", "ja": "Japanese"}[settings.conversation_language]
     if settings.prompt_extra.strip():
         instructions += "\nExperimenter's additional instruction:\n" + settings.prompt_extra
+    if settings.typing_mode == "presence":
+        instructions += (
+            "\nPresence is a harness observation at request time, not a human utterance."
+            " human_typing means recent input activity; the unsent draft is private."
+            " It does not require yielding. Choose whether to emit or yield."
+            " Presence changes do not wake you after yield and cannot update an in-flight request.")
     payload = {
         "source": "harness_state_not_a_human_message",
         "context": settings.context,
@@ -207,5 +222,8 @@ def make_prompt(settings: Settings, events: list[dict[str, Any]], trigger: str,
         "utterances_in_this_cycle": emitted,
         "public_events": transcript,
         "control_events": controls[-24:],
+        "typing_mode": settings.typing_mode,
     }
+    if settings.typing_mode == "presence":
+        payload["presence"] = presence if presence is not None else {"human_typing": False}
     return instructions, json.dumps(payload, ensure_ascii=False)

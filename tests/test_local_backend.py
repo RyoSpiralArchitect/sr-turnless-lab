@@ -41,6 +41,7 @@ class LocalBackendTests(unittest.TestCase):
         self.tokenizer.get_chat_template.return_value = "test-template"
         self.model = Mock()
         self.model.device = "cpu"
+        self.model.config = SimpleNamespace(to_dict=lambda: {})
         self.model.generation_config = SimpleNamespace(eos_token_id=[9, 10], to_dict=lambda: {"eos_token_id": [9, 10]})
 
     def run_model(self, tokens):
@@ -64,6 +65,30 @@ class LocalBackendTests(unittest.TestCase):
     def test_unknown_local_stop_is_incomplete(self):
         result = self.run_model([8, 8])
         self.assertEqual((result.status, result.finish_reason), ("incomplete", "other_stop"))
+
+    def test_short_window_caps_generation_without_truncating_input(self):
+        self.model.config = SimpleNamespace(to_dict=lambda: {"n_positions": 5})
+        result = self.run_model([8, 9])
+        self.assertEqual(self.model.generate.call_args.kwargs["max_new_tokens"], 2)
+        self.assertEqual(result.usage["input_tokens"], 3)
+        self.assertEqual(result.metadata["effective_max_new_tokens"], 2)
+        self.assertEqual(result.status, "completed")
+
+    def test_private_only_capped_output_keeps_usage_and_stop_reason(self):
+        self.model.config = SimpleNamespace(to_dict=lambda: {"model_type": "gpt_oss"})
+        self.tokenizer.decode.return_value = "<|channel|>analysis<|message|>private"
+        result = self.run_model([8] * 128)
+        self.assertEqual((result.status, result.finish_reason, result.raw), ("incomplete", "length", ""))
+        self.assertEqual(result.usage["output_tokens"], 128)
+        self.assertTrue(result.metadata["private_reasoning_omitted"])
+        self.assertIn("final channel", result.metadata["public_extraction_error"])
+
+    def test_eos_without_public_final_is_invalid_response(self):
+        self.model.config = SimpleNamespace(to_dict=lambda: {"model_type": "gpt_oss"})
+        self.tokenizer.decode.return_value = "<|channel|>analysis<|message|>private<|return|>"
+        result = self.run_model([8, 9])
+        self.assertEqual((result.status, result.finish_reason, result.raw), ("invalid_response", "eos", ""))
+        self.assertIn("final channel", result.error)
 
     def test_offline_load_does_not_download_or_trust_remote_code(self):
         tf = SimpleNamespace(AutoTokenizer=Mock(), AutoModelForCausalLM=Mock())

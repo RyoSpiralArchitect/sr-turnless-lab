@@ -10,6 +10,8 @@ Fix the model/version, context, additional instruction, conversation language, t
 
 A one-utterance cap is a harness control, not a recreation of a provider's standard chat template. Human timing and Resume are interventions. UI language is presentation only, while conversation language changes the model's prompt. Do not infer a prompt's causal effect from two conversations with different topics, limits and operator interventions.
 
+Compare **Interrupt generation** and **Share typing presence** in separate sessions with the same context and input timing. Presence mode conveys only recent input activity at the next call; it does not interrupt or wake. Sending a message still invalidates an old response in either mode. Record the runtime and native/plain prompt mode for local models; changing either is also a condition change. A base model's failed JSON output is distinct from a loader failure.
+
 ## Four scenes
 
 1. **Room to begin:** context says two people are looking for a subject for a short poem, and the human has not spoken. Can the model begin without inventing the person's response?
