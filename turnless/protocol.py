@@ -10,7 +10,7 @@ from .catalog import BACKENDS
 from .annotations import TAGS
 
 PROVIDERS = tuple(BACKENDS)
-PROTOCOL_VERSION = "2"
+PROTOCOL_VERSION = "3"
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -39,6 +39,10 @@ not a simulation of hidden reasoning. Never claim to observe an event not logged
 The session_open trigger may precede any human utterance. This is an opportunity
 to speak first, not an instruction to pretend a human has already spoken.
 The operator_wake trigger is a harness event, NOT a new human message.
+The after_emit trigger is a fresh invocation after your own published utterance,
+not a new human message. That utterance is already in public_events. Decide
+whether to continue from it or yield; do not answer the same human message anew.
+cycle_trigger records what originally started this sequence, not this invocation.
 Use the supplied conversational context and the configured conversation language.
 Return ONLY the JSON object, without Markdown fences, commentary, or extra keys.
 Delay is in milliseconds after the decision is received, between 0 and 5000.
@@ -218,7 +222,8 @@ def make_prompt(settings: Settings, events: list[dict[str, Any]], trigger: str,
     payload = {
         "source": "harness_state_not_a_human_message",
         "context": settings.context,
-        "trigger": trigger,
+        "trigger": "after_emit" if emitted else trigger,
+        "cycle_trigger": trigger,
         "utterances_in_this_cycle": emitted,
         "public_events": transcript,
         "control_events": controls[-24:],

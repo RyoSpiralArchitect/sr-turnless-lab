@@ -94,6 +94,7 @@ def annotation_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     superseded: set[int] = set()
     valid = []
     issues = []
+    older_targets = []
     groups: Counter = Counter()
     for event in annotations:
         groups[(event.get("target_seq"), str(event.get("scope", "event")))] += 1
@@ -109,6 +110,11 @@ def annotation_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
                         or event.get("target_seqs") != payload["target_seqs"]):
                     raise ValueError("Unknown annotation version or mismatched target sequence.")
             valid.append(event)
+            if payload["scope"] == "cycle":
+                latest = next((e for e in reversed(prefix) if e.get("kind") in TERMINALS), None)
+                if latest is not None and latest["seq"] > payload["target_seq"]:
+                    older_targets.append({"annotation_seq": event["seq"], "target_seq": payload["target_seq"],
+                                          "latest_terminal_seq_at_save": latest["seq"]})
             if payload["supersedes"] is not None:
                 superseded.add(payload["supersedes"])
         except (ValueError, TypeError) as exc:
@@ -123,6 +129,9 @@ def annotation_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         "active_unsure": sum(e.get("judgment") == "unsure" for e in active),
         "active_note_only": sum(e.get("judgment") == "note" for e in active),
         "target_issues": issues,
+        # Retrospective reviews are valid. This is a navigation clue, not an
+        # inferred mismatch, replacement target, or reason to exclude a label.
+        "older_target_observations_not_errors": older_targets,
         "repeated_targets_including_revisions": [
             {"target_seq": seq, "scope": scope, "observations": n}
             for (seq, scope), n in groups.items() if n > 1

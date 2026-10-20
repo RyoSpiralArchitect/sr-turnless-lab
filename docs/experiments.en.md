@@ -41,6 +41,12 @@ The [observation workflow](annotations.md) supports explicit event/sequence targ
 
 ## Counts and limitations
 
+Use `cycles` in the analyzer to separate equal-length sequences that ended differently: a model yield, a format-error stop, an utterance cap, or an interruption. A zero-utterance yield with valid JSON and EOS is a behavioral decision under the scaffold, not an empty transport response. Loading, protocol compliance and conversational usefulness are separate questions; one short run cannot isolate model capacity.
+
+Check `presence_observations_at_request` before comparing typing modes. If every request snapshot is false, the presence condition did not include a positive activity observation. For a subsequent comparison, keep topic and input timing fixed and record whether typing overlapped a request. Do not add an automatic wake after yield just to obtain a positive snapshot: that would change the wake policy too.
+
+v0.5 / protocol 3 distinguishes `after_emit` from a new human-message trigger and retains the original `cycle_trigger`. Compare it against a pinned earlier harness with the same model, prompt scenario and other settings. The change makes the invocation's cause explicit; improved continuation is a hypothesis, not a validation result.
+
 Count yields, forced stops, protocol errors, provider errors, interruptions and discarded responses separately. The analyzer's protocol-error denominator is all requests, including those discarded before parsing; it is not an unconditional format-compliance rate.
 
 Inspect inference latency separately from deliberate wait time. Pending exports can acquire more events later. For qualitative reviews, retain source hashes, event IDs, reviewer identity, provisional/final status and uncertainty. Assistant-authored draft reviews are not human annotations or gold labels.

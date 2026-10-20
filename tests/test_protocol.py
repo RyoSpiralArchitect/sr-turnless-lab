@@ -78,7 +78,8 @@ class ProtocolTests(unittest.TestCase):
         data = json.loads(payload)
         self.assertEqual([e["speaker"] for e in data["public_events"]], ["assistant", "assistant"])
         self.assertNotIn("private-observer-note", payload)
-        self.assertEqual(data["trigger"], "operator_wake")
+        self.assertEqual(data["trigger"], "after_emit")
+        self.assertEqual(data["cycle_trigger"], "operator_wake")
 
 
 if __name__ == "__main__":

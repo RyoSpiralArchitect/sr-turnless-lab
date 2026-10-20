@@ -11,6 +11,65 @@ from typing import Any
 from .annotations import annotation_summary
 
 
+def cycle_summaries(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Describe published sequences, including interrupted/unfinished ones.
+
+    Interrupt records carry the new epoch, so they end the active cycle rather
+    than the cycle matching their epoch. Late discarded results are not speech.
+    """
+    cycles: dict[int, dict[str, Any]] = {}
+    active = None
+    preceding_human = None
+
+    def end(cycle: dict[str, Any], event: dict[str, Any], outcome: str) -> None:
+        cycle.update(outcome=outcome, end_seq=event.get("seq"), reason=event.get("reason"))
+
+    for event in events:
+        kind, epoch = event.get("kind"), event.get("epoch")
+        if kind == "utterance" and event.get("speaker") == "human":
+            preceding_human = event.get("seq")
+        if kind == "wake" and type(epoch) is int:
+            if active is not None:
+                end(active, event, "superseded_by_wake")
+            active = {"epoch": epoch, "wake_seq": event.get("seq"),
+                      "trigger": event.get("reason"), "preceding_human_seq": preceding_human,
+                      "requests": 0, "assistant_seqs": [], "assistant_utterances": 0,
+                      "outcome": "open_at_snapshot", "end_seq": None, "reason": None}
+            cycles[epoch] = active
+        cycle = cycles.get(epoch) if type(epoch) is int else None
+        if cycle is not None:
+            if kind == "request":
+                cycle["requests"] += 1
+            elif kind == "utterance" and event.get("speaker") == "assistant":
+                cycle["assistant_seqs"].append(event["seq"])
+                cycle["assistant_utterances"] += 1
+            elif kind in ("yield", "forced_stop", "harness_error"):
+                end(cycle, event, {"yield": "model_yield", "forced_stop": "harness_stop",
+                                   "harness_error": "harness_error"}[kind])
+                if active is cycle:
+                    active = None
+        if active is not None and kind in ("interrupt", "session_close"):
+            end(active, event, "interrupted" if kind == "interrupt" else "session_closed")
+            active = None
+    return list(cycles.values())
+
+
+def presence_observations(events: list[dict[str, Any]]) -> dict[str, int]:
+    """Count the activity state delivered in requests, not UI typing events."""
+    counts = {"human_typing_true": 0, "human_typing_false": 0, "missing_or_invalid": 0}
+    for event in events:
+        if event.get("kind") != "request":
+            continue
+        try:
+            payload = json.loads(event["input"])
+            value = payload["presence"]["human_typing"]
+        except (KeyError, ValueError, TypeError):
+            value = None
+        key = "human_typing_true" if value is True else "human_typing_false" if value is False else "missing_or_invalid"
+        counts[key] += 1
+    return counts
+
+
 def summarize(path: Path) -> dict[str, Any]:
     events = []
     with path.open(encoding="utf-8") as stream:
@@ -35,6 +94,7 @@ def summarize(path: Path) -> dict[str, Any]:
         "provider": settings["provider"], "requested_model": settings["model"],
         "actual_models": sorted({e["actual_model"] for e in raw if e.get("actual_model")}),
         "version": start.get("version"),
+        "protocol_version": start.get("provenance", {}).get("protocol_version", "legacy_unspecified"),
         "source_sha256": start.get("provenance", {}).get("source_sha256"),
         "constraint_mode": start.get("constraint_mode", "legacy_unspecified"),
         "conversation_language": settings.get("conversation_language", "legacy_unspecified"),
@@ -48,6 +108,8 @@ def summarize(path: Path) -> dict[str, Any]:
         "policy": settings["policy"], "structured": settings["structured"],
         "max_utterances": settings["max_utterances"], "min_gap_ms": settings["min_gap_ms"],
         "proactive": settings["proactive"], "requests": requests,
+        "cycles": cycle_summaries(events),
+        "presence_observations_at_request": presence_observations(events),
         "assistant_utterances": len(assistant), "model_yields": len(yields),
         "zero_emit_yields_not_necessarily_failures": sum(e.get("emitted_in_cycle") == 0 for e in yields),
         "forced_stop_reasons": dict(Counter(e.get("reason") for e in events if e.get("kind") == "forced_stop")),

@@ -58,6 +58,22 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(snapshot["metrics"]["calls"], 3)
         self.assertEqual(p.payloads[0]["public_events"], [])
         self.assertEqual(p.payloads[1]["public_events"][0]["text"], "A1")
+        self.assertEqual([p["trigger"] for p in p.payloads], ["session_open", "after_emit", "after_emit"])
+        self.assertEqual([p["cycle_trigger"] for p in p.payloads], ["session_open"] * 3)
+
+    def test_continuation_is_not_a_new_human_message_and_new_cycle_resets(self):
+        p = Script(emit("First."), emit("A further thought."), YIELD, YIELD)
+        s = self.session(p)
+        s.human("Start here.")
+        self.settle(s)
+        s.human("Next topic.")
+        self.settle(s)
+        self.assertEqual([p["trigger"] for p in p.payloads],
+                         ["human_message", "after_emit", "after_emit", "human_message"])
+        self.assertEqual([p["cycle_trigger"] for p in p.payloads], ["human_message"] * 4)
+        self.assertEqual([p["utterances_in_this_cycle"] for p in p.payloads], [0, 1, 2, 0])
+        self.assertEqual(p.payloads[1]["public_events"][-1]["speaker"], "assistant")
+        self.assertEqual(p.payloads[3]["public_events"][-1]["text"], "Next topic.")
 
     def test_yield_does_not_automatically_wake(self):
         s = self.session(Script(YIELD, emit("should not happen")))

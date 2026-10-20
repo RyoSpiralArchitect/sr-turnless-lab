@@ -41,7 +41,9 @@ New observation records add these fields to the existing `annotation` event:
 
 This example is synthetic. `target_seq` anchors the event or completed sequence; `target_seqs` is derived and frozen by the server. `scope` is `event` or `cycle`. Labels are checked against the target: yield labels require a model yield; splitting requires a completed sequence of at least two assistant utterances; human messages and mechanical errors allow general notes/uncertainty/`other`.
 
-Saving on an already observed target appends a revision, referencing the prior annotation's `seq` in `supersedes`. The server rejects revisions of an already superseded record or a different target/scope. The original record stays intact. Unfinished drafts are kept per target only in page memory; reloads do not preserve drafts. A successful save clears the choice rather than carrying it into the next observation.
+Saving on an already observed target appends a revision, referencing the prior annotation's `seq` in `supersedes`. The server rejects revisions of an already superseded record or a different target/scope. The original record stays intact. Unfinished drafts are kept per target only in page memory; reloads do not preserve drafts. Since v0.5, a successful save clears both the choice and the selected target. Select a target again to inspect its history or deliberately revise it. If another target was selected while saving, that selection and its draft remain intact.
+
+The save button includes the target ID. **Latest sequence / 最新の一連へ** selects the most recently completed cycle; a notice identifies an older target when newer sequences exist. This helps with live review without moving an unfinished observation automatically. After saving, the toast names the target that actually received the observation.
 
 Annotations, drafts and revisions are excluded from model prompts. Observer judgments are not a validated benchmark, and no training eligibility is implied.
 
@@ -50,5 +52,7 @@ Annotations, drafts and revisions are excluded from model prompts. Observer judg
 `python3 -m turnless.analyze "runs/*.jsonl"` now includes `annotation_review`: current labeled observations, unsure and note-only counts, superseded events, legacy counts, repeated targets and target issues. The older `human_annotations` field is retained as a **raw label count**, including legacy or superseded records; it is not the current judgment set.
 
 Old records without `annotation_version` remain legacy records. If their target is a wake, a missing event or incompatible with the label, the analyzer reports the issue and excludes them from current valid label counts. It does not infer a corrected target or label and does not rewrite the file. Repeated target counts include intentional revisions as well as old duplicate observations.
+
+`older_target_observations_not_errors` lists annotations saved after a newer sequence had completed. These remain valid observations: deliberate retrospective review is allowed. The list is a navigation clue for checking a note against its actual target, not a semantic mismatch detector or an inferred replacement target.
 
 旧ログのメモは消えません。対象やラベルが合わない可能性は集計で示し、推測で付け替えません。同じラベルが続くこと自体も誤りとは扱いません。これまでの観察を読み直す際は、元のJSONLと観察時点の文脈を保持してください。

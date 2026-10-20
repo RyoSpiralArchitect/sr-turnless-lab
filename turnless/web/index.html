@@ -9,7 +9,7 @@
 </head>
 <body>
   <header class="masthead">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">∴</span><div><h1>SR Turnless Lab<span class="version">v0.4</span></h1><p data-i18n="tagline">An utterance can end before the conversation is handed over.</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">∴</span><div><h1>SR Turnless Lab<span class="version">v0.5</span></h1><p data-i18n="tagline">An utterance can end before the conversation is handed over.</p></div></div>
     <div class="header-actions"><span id="provider-label" class="provider-label" data-i18n="notConnected">Scripted demo / no model connected</span><label class="sr-only" for="ui-language" data-i18n="uiLanguage">Interface language</label><select id="ui-language" aria-label="Interface language" data-i18n-aria="uiLanguage"><option value="en">English</option><option value="ja">日本語</option></select><button id="export" class="button quiet" disabled><span data-i18n="export">Export JSONL</span> ↗</button></div>
   </header>
   <main class="workbench">
@@ -71,10 +71,11 @@
     <aside class="observer panel" aria-label="Trace and observations" data-i18n-aria="observer">
       <div class="section-heading"><h2 data-i18n="observe">Observe the boundaries</h2><span class="mono">02</span></div>
       <p class="help observer-intro" data-i18n="observerIntro">Choose what you observed. A sequence can be useful, unnecessary, or still hard to judge.</p>
-      <div class="review-nav"><label class="field"><span data-i18n="reviewSequence">Review a completed sequence</span><select id="review-sequence" disabled><option value="" data-i18n="chooseSequence">Choose a sequence…</option></select></label><button id="next-unreviewed" class="text-button" type="button" disabled data-i18n="nextUnreviewed">Next unreviewed</button><span id="review-progress" class="help"></span></div>
+      <div class="review-nav"><label class="field"><span data-i18n="reviewSequence">Review a completed sequence</span><select id="review-sequence" disabled><option value="" data-i18n="chooseSequence">Choose a sequence…</option></select></label><button id="next-unreviewed" class="text-button" type="button" disabled data-i18n="nextUnreviewed">Next unreviewed</button><button id="latest-sequence" class="text-button" type="button" disabled data-i18n="latestSequence">Latest sequence</button><span id="review-progress" class="help"></span></div>
       <form id="annotation-form" class="annotation-form">
         <div class="target-heading"><h3 data-i18n="observationTarget">Observation target</h3><select id="annotation-scope" aria-label="Observation scope" data-i18n-aria="observationScope" disabled><option value="event" data-i18n="scopeEvent">This event</option><option value="cycle" data-i18n="scopeCycle">Whole sequence</option></select></div>
         <p id="target-label" class="target-label" data-i18n="chooseTarget">Select an utterance or a completed sequence to begin.</p>
+        <p id="target-age" class="help" role="status" hidden></p>
         <div id="target-context" class="target-context" hidden></div>
         <div id="target-preview" class="target-preview" hidden></div>
         <label class="field"><span data-i18n="annotationLabel">Observation</span><select id="tag" required disabled aria-describedby="tag-help"><option value="" data-i18n="chooseObservation">Choose an observation…</option></select></label>

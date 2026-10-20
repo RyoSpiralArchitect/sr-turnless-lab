@@ -159,6 +159,7 @@ function renderReviewNavigation() {
   $("review-sequence").value = annotationScope === "cycle" ? String(selected) : "";
   $("review-sequence").disabled = !cycles.length;
   $("next-unreviewed").disabled = !cycles.some(target => !activeObservation(target));
+  $("latest-sequence").disabled = !cycles.length;
   $("review-progress").textContent = cycles.length ? t("reviewProgress", {
     n: cycles.filter(target => activeObservation(target)).length, total: cycles.length}) : t("noSequences");
 }
@@ -181,6 +182,11 @@ function renderObservation() {
   $("target-label").textContent = target
     ? `${t(target.scope === "cycle" ? "scopeCycle" : "scopeEvent")} · ${target.target_seqs.map(seq => "#" + seq).join(", ")}`
     : t(event ? "notObservationTarget" : "chooseTarget");
+  const latest = annotationTargets.filter(item => item.scope === "cycle").at(-1);
+  const older = target && latest && target.target_seq < latest.target_seq;
+  $("target-age").hidden = !older;
+  $("target-age").textContent = older
+    ? t("olderTarget", {selected: target.target_seq, latest: latest.target_seq}) : "";
   $("target-preview").replaceChildren();
   $("target-preview").hidden = !target;
   $("target-context").hidden = true;
@@ -217,7 +223,8 @@ function renderObservation() {
   $("tag").value = draft?.tag || "";
   $("note").value = draft?.note || "";
   const active = target && activeObservation(target);
-  $("annotate").textContent = t(annotationPending ? "savingObservation" : active ? "reviseObservation" : "annotate");
+  $("annotate").textContent = annotationPending ? t("savingObservation") : target
+    ? t(active ? "reviseTarget" : "saveTarget", {seq: target.target_seq}) : t("annotate");
   $("observation-history").replaceChildren();
   if (target) {
     const history = targetObservations(target);
@@ -248,6 +255,15 @@ function selectEvent(seq, scope = "event") {
     detail = {public_event: event, provider_output: raw || null};
   }
   $("inspect").textContent = JSON.stringify(detail, null, 2);
+  renderObservation();
+  renderReviewNavigation();
+  renderTrace();
+}
+function clearSelection() {
+  selected = null;
+  annotationScope = "event";
+  $("selected-label").textContent = t("noneSelected");
+  $("inspect").textContent = t("inspectHelp");
   renderObservation();
   renderReviewNavigation();
   renderTrace();
@@ -478,7 +494,10 @@ $("annotation-form").addEventListener("submit", async (event) => {
     await mutate("/api/annotate", payload);
     if (sid === sessionId) {
       annotationDrafts.delete(key);
-      toast(t("annotated"));
+      // A subsequent observation must explicitly choose its target. Do not clear
+      // another target selected while this save was in flight.
+      if (draftKey() === key) clearSelection();
+      toast(t("annotatedTarget", {seq: target.target_seq}));
     }
   } catch (error) { toast(error.message, true); }
   finally {
@@ -496,6 +515,10 @@ $("review-sequence").addEventListener("change", () => {
 $("next-unreviewed").addEventListener("click", () => {
   const next = annotationTargets.find(target => target.scope === "cycle" && !activeObservation(target));
   if (next) selectEvent(next.target_seq, "cycle");
+});
+$("latest-sequence").addEventListener("click", () => {
+  const latest = annotationTargets.filter(target => target.scope === "cycle").at(-1);
+  if (latest) selectEvent(latest.target_seq, "cycle");
 });
 $("export").addEventListener("click", async () => {
   if (!sessionId) return;

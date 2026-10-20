@@ -8,6 +8,20 @@ A small local laboratory for conversational boundaries. A model produces one pub
 
 This is an **application-level protocol**, not a modification of model weights, tokenizers, native chat templates, or EOS semantics. `emit` and `yield` are JSON values, not special tokens. There is no tool execution, background thinking, timer-driven reawakening, or fine-tuning pipeline.
 
+## An observed exchange
+
+Sentence excerpts from one exploratory conversation, with intervening text omitted:
+
+> **Human · #211:** it is often not easy to decide when you speak, stop talking, or keep silent for human too.
+>
+> **Assistant · #220, utterance 2 of 5:** Neither speaker creates the whole conversational rhythm alone; it arises between contributions.
+>
+> **Assistant · #232, utterance 5 of 5:** A pause can mean thoughtfulness, discomfort, respect, or nothing at all depending on the setting.
+
+The assistant produced five utterances without an intervening human message, then yielded. Repeated agreement accompanied shifts in framing; whether that adds something or becomes redundant is a question for observation, not something message count decides.
+
+Recorded 2026-10-21 JST with requested/reported model `gpt-5.6-luna`, v0.4.0 / protocol 2, Prompt only, Exploratory, English, typing presence, an 11-utterance cap and 350 ms minimum gap. Private trace `ed97a591…`, events #211–235; only the selected sentences are published here. Across that session: 26 calls, 19 published utterances, six model yields and one format-error stop. Earlier, the model repeatedly emitted once then yielded; the longer sequences followed human encouragement within the same evolving conversation. All 26 request snapshots had `human_typing: false`, so this run does not demonstrate a typing-presence effect. It is an example, not a controlled comparison or evidence of the model's inner experience.
+
 ## Start in three minutes
 
 Python 3.10+. The scripted demo and HTTP backends require only the standard library. No build, npm, or API key is needed for the demo.
@@ -96,6 +110,8 @@ Loaders require a local directory, use offline tokenizer loading and `trust_remo
 
 One inference produces one decision. `emit` publishes an utterance and requests the next decision using the public history. `yield` waits for human input or an explicit resume. Starting an experiment is an external trigger, not evidence of autonomous reawakening.
 
+Since v0.5 / protocol 3, a continuation request uses `trigger: "after_emit"`; `cycle_trigger` retains the original wake reason. This distinguishes a fresh decision after the assistant's own utterance from a new human message. Earlier versions repeated the original trigger throughout the cycle. Treat this prompt change as a new experimental condition; its effect on model behavior has not yet been measured.
+
 `delay_ms` is a wait **after inference returns**, from 0 to 5000 ms. After the first utterance, the applied wait is the larger of the model's proposal and the configured minimum gap. Both values are recorded.
 
 **Interrupt generation** is the default typing mode: typing invalidates the current epoch. **Share typing presence** leaves generation running and adds recent human activity to the next request's harness state. Both modes show real assistant activity (queued, generating, or waiting to publish), not hidden thought. Mode selection is fixed for a session and saved in JSONL.
@@ -114,6 +130,8 @@ There is no default label. Every available label has an English/Japanese definit
 
 Choose **Not sure yet** or **Note only** when a label would overstate the observation. Notes and uncertainty are recorded separately from labels. Saved observations remain visible; **Save revision** appends a replacement linked by `supersedes`, preserving the original. **Next unreviewed** helps navigate completed sequences. Switching targets keeps unfinished drafts for that target during the page session; it never carries a label to a different target.
 
+Saving clears the selected target, so a later observation cannot silently revise that same sequence. Select it again to inspect or revise its saved history. The save button names the target ID; **Latest sequence** and an older-target notice help keep a live review aligned with the conversation. Incoming events never move an unfinished review to a different target.
+
 See the [annotation guide](docs/annotations.md) for target rules, event fields, and legacy-log handling. These are exploratory operator judgments, not independently adjudicated ground truth. The model prompt and speaking policy are unchanged in v0.3.
 
 ## Traces, evidence, and privacy
@@ -123,6 +141,8 @@ See the [annotation guide](docs/annotations.md) for target rules, event fields, 
 - `raw_output`: public candidate text, sanitized public response blocks, normalized status, native finish reason, model/request identifiers, supplied token counts, and latency. Local receipts include template, rendered-prompt, and input-token hashes plus generation configuration.
 - `utterance`, `yield`, `forced_stop`, and `discard`: distinct events. A cap stop is not a model decision to wait.
 - `flag`: a heuristic candidate, not ground truth. `annotation`: observer labels/notes excluded from model input.
+
+`python3 -m turnless.analyze "runs/*.jsonl"` reports each cycle's published event IDs and ending (`model_yield`, `harness_stop`, interruption or an unfinished snapshot). `presence_observations_at_request` counts the booleans recorded in request payloads; UI typing events alone do not establish that an active-typing signal was included. Missing legacy snapshots remain unknown, and a failed request does not prove delivery. Annotation summaries also identify reviews saved on an older sequence, without treating retrospective review as an error or changing its label.
 
 Private thinking/reasoning blocks are not requested for observation or stored. A structured tool input is a parsed public payload, not verbatim wire text; the receipt identifies its transport. Source hashes identify the harness, not hosted model weights. Local template/config receipts do not constitute a full weight-file fingerprint.
 

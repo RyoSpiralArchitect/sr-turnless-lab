@@ -125,6 +125,16 @@ class AnnotationTests(unittest.TestCase):
         events.append({"seq": 11, "kind": "annotation", **payload})
         self.assertEqual(len(annotation_summary(events)["target_issues"]), 1)
 
+    def test_reviewing_older_sequence_is_visible_but_still_valid(self):
+        events = sequence()
+        events.append({"seq": 11, "kind": "annotation",
+                       **annotation_payload(events, 4, "good-silence", scope="cycle")})
+        result = annotation_summary(events)
+        self.assertEqual(result["target_issues"], [])
+        self.assertEqual(result["active_labeled"], {"good-silence": 1})
+        self.assertEqual(result["older_target_observations_not_errors"],
+                         [{"annotation_seq": 11, "target_seq": 4, "latest_terminal_seq_at_save": 10}])
+
     def test_observations_and_revisions_stay_out_of_prompt(self):
         events = sequence()
         for event in events:
