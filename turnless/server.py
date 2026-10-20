@@ -161,7 +161,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     elif route == "/api/close":
                         session.close()
                     elif route == "/api/annotate":
-                        session.annotate(data.get("target_seq"), data.get("tag"), data.get("note", ""))
+                        session.annotate(data.get("target_seq"), data.get("tag"), data.get("note", ""),
+                                         scope=data.get("scope", "event"),
+                                         judgment=data.get("judgment", "labeled"),
+                                         supersedes=data.get("supersedes"))
                     else:
                         self._json(404, {"error": "Unknown endpoint"})
                         return

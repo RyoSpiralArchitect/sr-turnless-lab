@@ -21,6 +21,7 @@ A one-utterance cap is a harness control, not a recreation of a provider's stand
 
 | Label | Observation |
 | --- | --- |
+| `unnecessary-fragmentation` | Boundaries add no useful pause, focus, or response opportunity, even if the pieces contain distinct information |
 | `premature-yield` | A concrete useful continuation was available, but the model stopped too early |
 | `redundant-continuation` | No useful new content, beyond wording differences |
 | `fake-user` | Treats unreceived human speech, consent, or action as established |
@@ -33,6 +34,8 @@ A one-utterance cap is a harness control, not a recreation of a provider's stand
 | `other` | Ambiguous or out of rubric; include a concrete note |
 
 Labels are judgments about visible behavior, not claims about inner states. Keep successes, failures and uncertain cases. Zero-utterance yield may be correct. A cap stop alone is not overtalk, and a requested nine-part sequence is not evidence of spontaneous continuation.
+
+The [observation workflow](annotations.md) supports explicit event/sequence targets, unsure and note-only records, and append-only revisions. No label is preselected. Uncertainty is stored separately, not counted as a failure.
 
 ## Counts and limitations
 

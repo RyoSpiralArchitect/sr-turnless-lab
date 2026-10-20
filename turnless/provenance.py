@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import __version__
 from .catalog import ADAPTER_VERSION
+from .annotations import ANNOTATION_VERSION
 from .protocol import PROTOCOL_VERSION, SCHEMA
 
 TRACE_VERSION = "2"
@@ -30,6 +31,7 @@ def source_identity() -> dict:
     result = {
         "version": __version__, "trace_version": TRACE_VERSION,
         "protocol_version": PROTOCOL_VERSION, "adapter_version": ADAPTER_VERSION,
+        "annotation_version": ANNOTATION_VERSION,
         "python": platform.python_version(),
         "source_sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
         "source_files": manifest,

@@ -8,6 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from .annotations import annotation_summary
 
 
 def summarize(path: Path) -> dict[str, Any]:
@@ -50,7 +51,11 @@ def summarize(path: Path) -> dict[str, Any]:
         "finish_reasons": dict(Counter(e.get("finish_reason", "legacy_unspecified") for e in raw)),
         "latency_median_ms": statistics.median(e["latency_ms"] for e in raw) if raw else None,
         "automatic_flags_not_ground_truth": dict(Counter(e.get("tag") for e in events if e.get("kind") == "flag")),
-        "human_annotations": dict(Counter(e.get("tag") for e in events if e.get("kind") == "annotation")),
+        # Retained for older consumers: raw label counts, including superseded
+        # and legacy observations. Use annotation_review for current judgments.
+        "human_annotations": dict(Counter(e["tag"] for e in events
+                                          if e.get("kind") == "annotation" and e.get("tag"))),
+        "annotation_review": annotation_summary(events),
         "trace_has_unresolved_requests": requests > len(raw) + sum(e.get("kind") == "provider_error" and "latency_ms" in e for e in events),
     }
 

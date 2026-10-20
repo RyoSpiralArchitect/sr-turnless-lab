@@ -6,3 +6,43 @@
 .button>span[data-i18n]{font-size:inherit}.field select{min-width:0}.empty-state p{max-width:300px}.composer-bottom{flex-wrap:wrap}.composer-bottom>span{line-height:1.6}
 @media(min-width:1161px){.workbench{grid-template-columns:285px minmax(330px,1fr) 310px}}
 @media(max-width:720px){.masthead{height:auto;min-height:108px;align-items:flex-start}.brand h1{font-size:18px}.brand p{max-width:200px}.header-actions{max-width:108px;justify-content:flex-end;gap:6px}.header-actions .button{white-space:normal;font-size:9px}.workbench{margin-top:12px}.floor-controls{flex-wrap:wrap}.floor-controls label,.composer-bottom label{font-size:10px}.composer-bottom>span{font-size:9px;max-width:145px}.settings #anthropic-mode-field,.settings #constraint-help{grid-column:1/-1}}
+/* Observations: the public target and judgment come before raw trace details. */
+.observer{display:flex;flex-direction:column;gap:0}
+.observer>*{flex-shrink:0}
+.observer-intro{margin:12px 0 16px;font-size:11px;line-height:1.7}
+.review-nav{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:7px 10px;margin-bottom:18px}
+.review-nav .field{width:100%;margin:0}
+.review-nav .help{margin:0}
+.review-nav .text-button{font-size:11px}
+.annotation-form{padding-top:16px}
+.target-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.target-heading h3{font-size:11px;font-weight:600}
+.target-heading select{min-width:0;max-width:145px;padding:5px;border:1px solid var(--line);border-radius:5px;background:white;color:var(--muted);font-size:10px}
+.target-label{font-size:11px;line-height:1.7;overflow-wrap:anywhere;margin:10px 0;color:var(--accent)}
+.target-context{padding:9px 11px;margin:10px 0;background:#f4f6f1;border-radius:6px;max-height:85px;overflow:auto}
+.target-context strong,.target-event strong{display:block;font:9px ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted);margin-bottom:6px}
+.target-context p,.target-event p{font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}
+.target-preview{max-height:200px;overflow:auto;border:1px solid #dce6db;border-radius:6px;background:#fafff9;scrollbar-width:thin}
+.target-event{padding:11px}
+.target-event+.target-event{border-top:1px solid var(--line)}
+.annotation-form .field{font-size:11px;margin-top:15px}
+.annotation-form select,.annotation-form textarea{font-size:12px}
+.tag-help{font-size:11px;line-height:1.7;margin:7px 0}
+.annotation-form .button{font-size:12px;min-height:38px;background:var(--accent);color:white;border-color:var(--accent);justify-content:center}
+.annotation-form .button:hover:not(:disabled){background:#12533d}
+.observation-history:empty{display:none}
+.observation-history{max-height:170px;overflow:auto;margin-top:12px;scrollbar-width:thin}
+.saved-observation{border-left:2px solid #8ea58a;padding:4px 0 4px 10px;margin-top:9px;overflow-wrap:anywhere}
+.saved-observation strong{font-size:11px;font-weight:600}
+.saved-observation p{font-size:11px;line-height:1.65;margin-top:5px;white-space:pre-wrap}
+.saved-observation.superseded{color:var(--muted);border-left-color:var(--line)}
+.trace-details{border-top:1px solid var(--line);margin-top:20px;padding-top:14px}
+.trace-details summary{font-size:11px;color:var(--muted);cursor:pointer}
+.trace-details .trace-toolbar{margin:18px 0 9px}
+.trace-details .trace{height:170px;min-height:0;max-height:170px;flex:none}
+.trace-details pre{height:auto;min-height:70px;max-height:150px}
+.control-row.selected{border-left:2px solid var(--accent);padding-left:9px}
+.review-sequence-button{font-size:11px;padding:4px 6px;border:1px solid #dce6db;border-radius:5px;background:#f4f9f2}
+@media(min-width:1161px){.workbench{grid-template-columns:275px minmax(330px,1fr) 350px}}
+@media(min-width:1700px){.workbench{grid-template-columns:290px minmax(400px,1fr) 370px}}
+@media(max-width:720px){.workbench.has-session .observer{order:2}.workbench.has-session .settings{order:3}.observer .section-heading{margin-bottom:0}.target-preview{max-height:250px}.trace-details pre{margin-bottom:0}}

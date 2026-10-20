@@ -18,5 +18,9 @@ for (const language of ["en", "ja"]) {
   i18n.setLanguage(language);
   assert.equal(document.documentElement.lang, language);
   assert.ok(!i18n.t("yieldEvent", {n: 3}).includes("{n}"));
+  for (const key of Object.keys(i18n.messages[language]).filter(key => key.startsWith("tag_"))) {
+    const definition = "definition_" + key.slice(4);
+    assert.ok(i18n.messages[language][definition], `Missing ${language} definition for ${key}`);
+  }
 }
 console.log("English/Japanese catalogs and HTML translation keys: OK");

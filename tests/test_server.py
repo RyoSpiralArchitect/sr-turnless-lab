@@ -81,6 +81,19 @@ class ServerTests(unittest.TestCase):
             rows = [json.loads(line) for line in response.read().decode().splitlines()]
         self.assertEqual(rows[-1]["kind"], "export_metadata")
         self.assertEqual(snapshot["metrics"]["calls"], 0)
+        annotation = next(e for e in rows if e["kind"] == "annotation")
+        self.assertEqual(annotation["target_seqs"], [utterance["seq"]])
+        with self.call("/api/annotate", {"session": sid, "target_seq": utterance["seq"],
+                                       "judgment": "unsure", "supersedes": annotation["seq"]}) as response:
+            revised = json.load(response)
+        self.assertEqual(revised["events"][-1]["judgment"], "unsure")
+        self.assertIsNone(revised["events"][-1]["tag"])
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("/api/annotate", {"session": sid, "target_seq": 1, "tag": "other"})
+        self.assertEqual(ctx.exception.code, 400)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("/api/annotate", {"session": sid, "target_seq": utterance["seq"], "tag": "premature-yield"})
+        self.assertEqual(ctx.exception.code, 400)
         with self.call("/api/close", {"session": sid}) as response:
             self.assertEqual(json.load(response)["status"], "closed")
 

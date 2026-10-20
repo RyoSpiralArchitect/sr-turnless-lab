@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .protocol import TAGS, ProtocolError, Settings, make_prompt, parse_decision
+from .protocol import ProtocolError, Settings, make_prompt, parse_decision
+from .annotations import annotation_payload, observation_targets
 from .providers import Provider
 from . import __version__
 from .catalog import constraint_mode
@@ -133,13 +134,13 @@ class Session:
                 self._event("session_close", source="harness", upstream_pending=self.inflight)
                 self.condition.notify_all()
 
-    def annotate(self, target_seq: int, tag: str, note: str = "") -> None:
+    def annotate(self, target_seq: int, tag: str | None = None, note: str = "", *,
+                 scope: str = "event", judgment: str = "labeled",
+                 supersedes: int | None = None) -> None:
         with self.lock:
-            if type(target_seq) is not int or not 1 <= target_seq <= len(self.events):
-                raise ValueError("invalid target event")
-            if tag not in TAGS or not isinstance(note, str) or len(note) > 2000:
-                raise ValueError("invalid annotation")
-            self._event("annotation", source="observer", target_seq=target_seq, tag=tag, note=note)
+            payload = annotation_payload(self.events, target_seq, tag, note, scope=scope,
+                                         judgment=judgment, supersedes=supersedes)
+            self._event("annotation", source="observer", **payload)
 
     def _finish(self, cycle: Cycle, kind: str, reason: str) -> None:
         if self._valid(cycle):
@@ -286,6 +287,7 @@ class Session:
                 "session_id": self.id, "status": self.status, "inflight": self.inflight,
                 "settings": self.settings.public(), "cursor": len(self.events),
                 "events": [e.copy() for e in self.events if e["seq"] > after],
+                "annotation_targets": observation_targets(self.events),
                 "metrics": {
                     "calls": self.calls, "budget": self.settings.call_budget,
                     "assistant": sum(e["kind"] == "utterance" and e["speaker"] == "assistant" for e in self.events),

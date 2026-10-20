@@ -12,6 +12,8 @@ const storage = {
   remove(key) { try { sessionStorage.removeItem(key); } catch { /* storage may be disabled */ } },
 };
 let typingSignaled = false, creating = false, sendPending = false, toastTimer, pollErrors = 0;
+let annotationTargets = [], annotationScope = "event", annotationPending = false;
+const annotationDrafts = new Map();
 
 function toast(message, error = false) {
   clearTimeout(toastTimer);
@@ -80,7 +82,22 @@ function appendConversation(e) {
   } else {
     const cls = e.kind === "interrupt" ? "interrupted" : e.kind.includes("error") || e.kind === "forced_stop" ? "warning" : "";
     const row = node("div", "control-row " + cls);
-    row.append(node("span", "control-mark"), node("span", "", controlText(e)), node("span", "event-time", timeLabel(e.at_ms)));
+    row.dataset.seq = String(e.seq);
+    row.append(node("span", "control-mark"), node("span", "", controlText(e)), node("span", "event-time", `${timeLabel(e.at_ms)} · #${e.seq}`));
+    if (["yield", "forced_stop"].includes(e.kind)) {
+      const review = node("button", "text-button review-sequence-button", t("observeSequence"));
+      review.type = "button";
+      review.addEventListener("click", () => {
+        selectEvent(e.seq, "cycle");
+        const panel = document.querySelector(".observer");
+        if (window.matchMedia("(max-width: 1160px)").matches) {
+          panel.scrollIntoView({behavior: "smooth", block: "start"});
+        } else {
+          panel.scrollTop = 0;
+        }
+      });
+      row.append(review);
+    }
     stream.append(row);
   }
   if (shouldScroll) stream.scrollTop = stream.scrollHeight;
@@ -106,8 +123,120 @@ function renderTrace() {
   }
   box.scrollTop = stick ? box.scrollHeight : scroll;
 }
-function selectEvent(seq) {
+function draftKey() { return `${annotationScope}:${selected}`; }
+function rememberDraft() {
+  if (selected) annotationDrafts.set(draftKey(), {tag: $("tag").value, note: $("note").value});
+}
+function observationTarget() {
+  return annotationTargets.find(item => item.target_seq === selected && item.scope === annotationScope);
+}
+function targetObservations(target) {
+  return events.filter(e => e.kind === "annotation" && e.target_seq === target.target_seq
+    && (e.scope || "event") === target.scope);
+}
+function activeObservation(target) {
+  const history = targetObservations(target);
+  const replaced = new Set(history.map(e => e.supersedes));
+  return history.filter(e => !replaced.has(e.seq)).at(-1);
+}
+function observationName(event) {
+  return event.judgment === "unsure" ? t("judgmentUnsure")
+    : event.judgment === "note" ? t("judgmentNote") : t("tag_" + event.tag);
+}
+function renderReviewNavigation() {
+  const cycles = annotationTargets.filter(item => item.scope === "cycle");
+  $("review-sequence").replaceChildren(node("option", "", t("chooseSequence")));
+  $("review-sequence").firstChild.value = "";
+  for (const target of cycles) {
+    const terminal = events.find(e => e.seq === target.target_seq);
+    const label = `#${target.target_seqs[0]}–${target.target_seq} · ${t("sequenceCount", {n: target.target_seqs.length - 1})} · ${terminal.kind}`;
+    const option = node("option", "", (activeObservation(target) ? "✓ " : "") + label);
+    option.value = String(target.target_seq);
+    $("review-sequence").append(option);
+  }
+  $("review-sequence").value = annotationScope === "cycle" ? String(selected) : "";
+  $("review-sequence").disabled = !cycles.length;
+  $("next-unreviewed").disabled = !cycles.some(target => !activeObservation(target));
+  $("review-progress").textContent = cycles.length ? t("reviewProgress", {
+    n: cycles.filter(target => activeObservation(target)).length, total: cycles.length}) : t("noSequences");
+}
+function updateObservationChoice() {
+  const value = $("tag").value;
+  $("tag-help").textContent = t(value === "__unsure" ? "unsureHelp" : value === "__note" ? "noteOnlyHelp"
+    : value ? "definition_" + value : "observationChoiceHelp");
+  $("note").required = value === "__note";
+  $("annotate").disabled = !sessionId || !observationTarget() || annotationPending || !value
+    || (value === "__note" && !$("note").value.trim());
+}
+function renderObservation() {
+  const target = observationTarget();
+  const event = events.find(e => e.seq === selected);
+  const cycle = annotationTargets.find(item => item.target_seq === selected && item.scope === "cycle");
+  $("annotation-scope").disabled = !target || !cycle;
+  $("annotation-scope").value = annotationScope;
+  $("tag").disabled = !target || annotationPending;
+  $("note").disabled = !target || annotationPending;
+  $("target-label").textContent = target
+    ? `${t(target.scope === "cycle" ? "scopeCycle" : "scopeEvent")} · ${target.target_seqs.map(seq => "#" + seq).join(", ")}`
+    : t(event ? "notObservationTarget" : "chooseTarget");
+  $("target-preview").replaceChildren();
+  $("target-preview").hidden = !target;
+  $("target-context").hidden = true;
+  if (target) {
+    const firstSeq = target.target_seqs[0];
+    const human = events.filter(e => e.kind === "utterance" && e.speaker === "human" && e.seq < firstSeq).at(-1);
+    if (human) {
+      $("target-context").replaceChildren(node("strong", "", t("precedingHuman", {seq: human.seq})), node("p", "", human.text));
+      $("target-context").hidden = false;
+    }
+    for (const seq of target.target_seqs) {
+      const item = events.find(e => e.seq === seq);
+      const preview = node("div", "target-event");
+      preview.append(node("strong", "", `#${seq} · ${item.speaker || item.kind}`),
+        node("p", "", item.text || controlText(item)));
+      $("target-preview").append(preview);
+    }
+  }
+  $("tag").replaceChildren();
+  const placeholder = node("option", "", t("chooseObservation")); placeholder.value = "";
+  $("tag").append(placeholder);
+  if (target) {
+    const open = node("optgroup"); open.label = t("openJudgment");
+    for (const [value, key] of [["__unsure", "judgmentUnsure"], ["__note", "judgmentNote"]]) {
+      const option = node("option", "", t(key)); option.value = value; open.append(option);
+    }
+    const labels = node("optgroup"); labels.label = t("descriptiveLabels");
+    for (const tag of target.allowed_tags) {
+      const option = node("option", "", t("tag_" + tag)); option.value = tag; labels.append(option);
+    }
+    $("tag").append(open, labels);
+  }
+  const draft = annotationDrafts.get(draftKey());
+  $("tag").value = draft?.tag || "";
+  $("note").value = draft?.note || "";
+  const active = target && activeObservation(target);
+  $("annotate").textContent = t(annotationPending ? "savingObservation" : active ? "reviseObservation" : "annotate");
+  $("observation-history").replaceChildren();
+  if (target) {
+    const history = targetObservations(target);
+    for (const entry of history) {
+      const replaced = history.some(e => e.supersedes === entry.seq);
+      const row = node("div", "saved-observation" + (replaced ? " superseded" : ""));
+      row.append(node("strong", "", `#${entry.seq} · ${observationName(entry)}${replaced ? " · " + t("superseded") : ""}`));
+      if (entry.note) row.append(node("p", "", entry.note));
+      $("observation-history").append(row);
+    }
+    if (active) $("observation-history").prepend(node("p", "help", t("revisionHelp")));
+  }
+  for (const el of $("conversation").querySelectorAll("[data-seq]")) {
+    el.classList.toggle("selected", !!target?.target_seqs.includes(Number(el.dataset.seq)));
+  }
+  updateObservationChoice();
+}
+function selectEvent(seq, scope = "event") {
+  rememberDraft();
   selected = seq;
+  annotationScope = scope;
   const event = events.find(e => e.seq === seq);
   if (!event) return;
   $("selected-label").textContent = `#${seq} / ${event.kind}`;
@@ -117,17 +246,19 @@ function selectEvent(seq) {
     detail = {public_event: event, provider_output: raw || null};
   }
   $("inspect").textContent = JSON.stringify(detail, null, 2);
-  $("annotate").disabled = !sessionId;
-  for (const el of $("conversation").querySelectorAll(".utterance")) el.classList.toggle("selected", Number(el.dataset.seq) === seq);
+  renderObservation();
+  renderReviewNavigation();
   renderTrace();
 }
 function ingest(data) {
   if (data.session_id !== sessionId || data.cursor < cursor) return;
   lastSnapshot = data;
+  document.querySelector(".workbench").classList.add("has-session");
   status = data.status;
   const additions = (data.events || []).filter(e => !known.has(e.seq));
   for (const e of additions) { known.add(e.seq); events.push(e); }
   events.sort((a, b) => a.seq - b.seq);
+  annotationTargets = data.annotation_targets || [];
   for (const e of additions) appendConversation(e);
   cursor = Math.max(cursor, data.cursor || 0);
   const m = data.metrics;
@@ -145,8 +276,12 @@ function ingest(data) {
   $("message").disabled = status === "closed";
   $("send").disabled = status === "closed" || sendPending;
   $("export").disabled = false;
-  if (additions.length) renderTrace();
-  if (!selected && additions.length) selectEvent(additions.at(-1).seq);
+  if (additions.length) {
+    rememberDraft();
+    renderTrace();
+    renderReviewNavigation();
+    renderObservation();
+  }
 }
 function settings() {
   return {provider: $("provider").value, model: $("model").value.trim(),
@@ -187,6 +322,7 @@ function providerChanged() {
   $("constraint-help").textContent = t(local ? "localConstraint" : fixture ? "fixtureConstraint" : "constraint", {mode});
 }
 function localizeLiveView() {
+  rememberDraft();
   providerChanged();
   for (const option of $("provider").options) if (option.value === "fixture") option.textContent = t("fixtureLabel");
   if (sessionId) {
@@ -194,8 +330,10 @@ function localizeLiveView() {
     for (const event of events) appendConversation(event);
     $("start").replaceChildren(document.createTextNode(t("newExperiment")), node("span", "", "↗"));
     if (lastSnapshot) ingest(lastSnapshot);
-    if (selected) selectEvent(selected);
+    if (selected) selectEvent(selected, annotationScope);
   }
+  renderReviewNavigation();
+  renderObservation();
   renderTrace();
 }
 $("ui-language").addEventListener("change", () => {
@@ -220,6 +358,7 @@ $("settings-form").addEventListener("submit", async (event) => {
       }
       const data = await request("/api/session", config);
       sessionId = data.session_id; cursor = 0; selected = null; events = []; known = new Set();
+      annotationScope = "event"; annotationTargets = []; annotationDrafts.clear();
       typingSignaled = false;
       $("conversation").replaceChildren();
       $("inspect").textContent = t("inspectHelp");
@@ -257,11 +396,38 @@ $("stop").addEventListener("click", () => mutate("/api/interrupt", {reason: "ope
 $("wake").addEventListener("click", () => { typingSignaled = false; mutate("/api/wake").catch(error => toast(error.message, true)); });
 $("annotation-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!selected) return;
+  const target = observationTarget(), value = $("tag").value;
+  if (!target || !value || annotationPending) return;
+  const sid = sessionId, key = draftKey(), previous = activeObservation(target);
+  const judgment = value === "__unsure" ? "unsure" : value === "__note" ? "note" : "labeled";
+  const payload = {target_seq: target.target_seq, scope: target.scope, judgment,
+    tag: judgment === "labeled" ? value : null, note: $("note").value, supersedes: previous?.seq ?? null};
+  if (judgment === "note" && !payload.note.trim()) return;
+  rememberDraft();
+  annotationPending = true;
+  renderObservation();
   try {
-    await mutate("/api/annotate", {target_seq: selected, tag: $("tag").value, note: $("note").value});
-    $("note").value = ""; toast(t("annotated"));
+    await mutate("/api/annotate", payload);
+    if (sid === sessionId) {
+      annotationDrafts.delete(key);
+      toast(t("annotated"));
+    }
   } catch (error) { toast(error.message, true); }
+  finally {
+    annotationPending = false;
+    renderObservation();
+    renderReviewNavigation();
+  }
+});
+$("tag").addEventListener("change", () => { rememberDraft(); updateObservationChoice(); });
+$("note").addEventListener("input", () => { rememberDraft(); updateObservationChoice(); });
+$("annotation-scope").addEventListener("change", () => selectEvent(selected, $("annotation-scope").value));
+$("review-sequence").addEventListener("change", () => {
+  if ($("review-sequence").value) selectEvent(Number($("review-sequence").value), "cycle");
+});
+$("next-unreviewed").addEventListener("click", () => {
+  const next = annotationTargets.find(target => target.scope === "cycle" && !activeObservation(target));
+  if (next) selectEvent(next.target_seq, "cycle");
 });
 $("export").addEventListener("click", async () => {
   if (!sessionId) return;
@@ -301,8 +467,8 @@ async function boot() {
     openaiReady = !!providerReady.openai;
     compatHint = data.compat_base_url || "";
     if (compatHint && !$("compat-base-url").value) $("compat-base-url").value = compatHint;
-    $("tag").replaceChildren(...data.tags.map(tag => { const opt = node("option", "", tag); opt.value = tag; return opt; }));
-    $("tag").value = "redundant-continuation";
+    renderObservation();
+    renderReviewNavigation();
     providerChanged();
     const stored = storage.get("turnless-session");
     if (stored) {

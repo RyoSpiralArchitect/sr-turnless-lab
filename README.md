@@ -23,7 +23,7 @@ Open **http://127.0.0.1:8765**. Windows: `py -3 -m turnless` or `run.bat`. macOS
 1. Leave **Scripted demo** selected and start an experiment. It produces three consecutive utterances, then yields.
 2. Press **Resume**, then start typing to invalidate an unpublished response. Text is sent to the model only when you submit it.
 3. Disable **Wake model after sending** to record consecutive human messages.
-4. Select an utterance or trace event, add an observation, and export JSONL.
+4. Click **Observe sequence** beside a yield/stop, or select an individual utterance. Choose an observation and export JSONL.
 
 **The demo is a deterministic fixture, not evidence of LLM behavior.** Its repetition, malformed JSON, fabricated-role, and cap-stop cases are deliberately injected failures.
 
@@ -95,6 +95,16 @@ One inference produces one decision. `emit` publishes an utterance and requests 
 Typing, submitting a message, and stopping invalidate the current epoch. Late results are retained as discarded output and never published. Already published utterances remain in history. One inference worker runs per session; pending wake requests are coalesced to the latest history.
 
 Upstream inference cancellation and billing cessation are **not guaranteed**. A synchronous HTTP call may delay the next inference until it returns or times out. HTTP I/O timeout is 60 seconds; the 120-second cycle budget is checked between calls, not a hard deadline for running inference. Default limits: five utterances per cycle and 40 calls per session. Yield itself consumes a call.
+
+## Observe without forcing a verdict
+
+The observation panel shows the exact event IDs, public text, and preceding human message. **Whole sequence** covers assistant utterances in one completed cycle plus its yield or harness stop. **This event** targets only the selected event. Raw outputs and wake events remain inspectable but cannot receive behavioral labels.
+
+There is no default label. Every available label has an English/Japanese definition. **Unnecessary splitting** (`unnecessary-fragmentation`) describes boundaries that add no useful pause, focus, or response opportunity. It differs from **Redundant continuation** (repeating content) and **Yielding too early** (choosing to wait before finishing something needed). Multiple utterances alone do not establish a failure.
+
+Choose **Not sure yet** or **Note only** when a label would overstate the observation. Notes and uncertainty are recorded separately from labels. Saved observations remain visible; **Save revision** appends a replacement linked by `supersedes`, preserving the original. **Next unreviewed** helps navigate completed sequences. Switching targets keeps unfinished drafts for that target during the page session; it never carries a label to a different target.
+
+See the [annotation guide](docs/annotations.md) for target rules, event fields, and legacy-log handling. These are exploratory operator judgments, not independently adjudicated ground truth. The model prompt and speaking policy are unchanged in v0.3.
 
 ## Traces, evidence, and privacy
 

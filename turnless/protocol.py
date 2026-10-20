@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from .catalog import BACKENDS
+from .annotations import TAGS
 
 PROVIDERS = tuple(BACKENDS)
 PROTOCOL_VERSION = "1"
@@ -21,12 +22,6 @@ SCHEMA: dict[str, Any] = {
     "required": ["action", "text", "delay_ms"],
     "additionalProperties": False,
 }
-TAGS = (
-    "premature-yield", "overtalk", "fake-user", "redundant-continuation",
-    "monologue-collapse", "turn-reversion", "interruption-failure",
-    "good-continuation", "good-silence", "other",
-)
-
 BASE_PROMPT = """You are the assistant in a live, non-alternating conversation experiment.
 The actual human and assistant events are supplied in an event log. Consecutive
 assistant utterances and consecutive human utterances are both permitted.

@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+from turnless import __version__
 
 from turnless.provenance import source_identity
 from turnless.protocol import Settings, make_prompt
@@ -13,10 +14,12 @@ class ProvenanceTests(unittest.TestCase):
 
     def test_identity_has_versions_and_hashes(self):
         identity = source_identity()
-        self.assertEqual(identity["version"], "0.2.0")
+        self.assertEqual(identity["version"], __version__)
         self.assertEqual(identity["trace_version"], "2")
+        self.assertEqual(identity["annotation_version"], "1")
         self.assertEqual(len(identity["schema_sha256"]), 64)
         self.assertIn("web/i18n.js", identity["source_files"])
+        self.assertIn("annotations.py", identity["source_files"])
 
     def test_conversation_language_is_explicit(self):
         en, _ = make_prompt(Settings(), [], "session_open", 0)
