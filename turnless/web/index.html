@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>SR Turnless Lab · A laboratory for conversational boundaries</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/i18n.js" defer></script><script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="masthead">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">∴</span><div><h1>SR Turnless Lab<span class="version">v0.2</span></h1><p data-i18n="tagline">An utterance can end before the conversation is handed over.</p></div></div>
+    <div class="header-actions"><span id="provider-label" class="provider-label" data-i18n="notConnected">Scripted demo / no model connected</span><label class="sr-only" for="ui-language" data-i18n="uiLanguage">Interface language</label><select id="ui-language" aria-label="Interface language" data-i18n-aria="uiLanguage"><option value="en">English</option><option value="ja">日本語</option></select><button id="export" class="button quiet" disabled><span data-i18n="export">Export JSONL</span> ↗</button></div>
+  </header>
+  <main class="workbench">
+    <aside class="settings panel" aria-label="Experiment settings" data-i18n-aria="experimentSettings">
+      <div class="section-heading"><h2 data-i18n="experimentSettings">Experiment settings</h2><span class="mono">01</span></div>
+      <form id="settings-form">
+        <label class="field"><span data-i18n="backend">Model backend</span><select id="provider"><option value="fixture" data-i18n="fixtureLabel">Scripted demo (no key)</option></select></label>
+        <p id="provider-help" class="help" data-i18n="help_fixture">A fixed script for testing the harness. This is not an LLM.</p>
+        <div id="model-fields" hidden>
+          <label class="field"><span id="model-label" data-i18n="modelId">Model ID</span><input id="model" type="text" autocomplete="off" placeholder="Exact model ID"></label>
+          <label class="field" id="compat-url-field" hidden><span data-i18n="baseUrl">Endpoint base URL</span><input id="compat-base-url" type="url" autocomplete="off" placeholder="http://127.0.0.1:8000/v1"></label>
+          <label class="field" id="local-device-field" hidden><span data-i18n="device">Local device</span><select id="local-device"><option value="cpu">CPU</option><option value="mps">MPS</option><option value="cuda">CUDA</option></select></label>
+          <p id="key-status" class="help"></p>
+        </div>
+        <label class="field" id="fixture-field"><span data-i18n="demoCase">Demo case</span><select id="fixture-case"><option value="normal" data-i18n="case_normal">Consecutive utterances → yield</option><option value="redundant" data-i18n="case_redundant">Repeat the same utterance</option><option value="immediate-yield" data-i18n="case_yield">Yield immediately</option><option value="malformed" data-i18n="case_malformed">Malformed JSON</option><option value="fake-user" data-i18n="case_fake">Fabricated human role</option><option value="overtalk" data-i18n="case_overtalk">Continue until the cap</option></select></label>
+        <div class="divider"></div>
+        <label class="switch-row"><span><span data-i18n="proactive">Start before the human</span><small data-i18n="proactiveHelp">Wake once at session_open</small></span><input id="proactive" type="checkbox" checked role="switch"></label>
+        <label class="field"><span data-i18n="outputFormat">Output format</span><select id="structured"><option value="false" data-i18n="promptOnly">Prompt only / observe format errors</option><option value="true" data-i18n="schema">JSON Schema / constrain the format</option></select></label>
+        <label class="field" id="anthropic-mode-field" hidden><span data-i18n="anthropicMode">Claude constraint method</span><select id="anthropic-mode"><option value="json_schema" data-i18n="nativeSchema">Native JSON Schema</option><option value="tool" data-i18n="forcedTool">Forced tool (separate condition)</option></select></label>
+        <p id="constraint-help" class="help"></p>
+        <label class="field"><span data-i18n="policy">Speaking policy</span><select id="policy"><option value="neutral" data-i18n="neutral">Neutral</option><option value="sparse" data-i18n="sparse">Sparse / leave room</option><option value="exploratory" data-i18n="exploratory">Exploratory / allow development</option></select></label>
+        <label class="field range-field"><span><span data-i18n="utteranceCap">Consecutive utterance cap</span><output id="max-value" for="max-utterances">5</output></span><input id="max-utterances" type="range" min="1" max="12" value="5"></label>
+        <label class="field range-field"><span><span data-i18n="minGap">Minimum gap</span><output id="gap-value" for="min-gap">650 ms</output></span><input id="min-gap" type="range" min="0" max="3000" step="50" value="650"></label>
+        <p class="help" data-i18n="gapHelp">Cap stops are separate from model yield. The gap is added after inference.</p>
+        <details class="advanced"><summary data-i18n="advanced">Context, prompt & budget</summary>
+          <label class="field"><span data-i18n="conversationLanguage">Conversation language</span><select id="conversation-language"><option value="en">English</option><option value="ja">日本語</option></select></label>
+          <p class="help" data-i18n="languageHelp">An experiment condition. Changing the interface language does not change it.</p>
+          <label class="field"><span data-i18n="context">Shared context</span><textarea id="context" rows="3" maxlength="4000">We are exploring a conversation without a fixed speaking order.</textarea></label>
+          <label class="field"><span data-i18n="extraPrompt">Additional experiment instruction</span><textarea id="prompt-extra" rows="3" maxlength="4000" data-i18n-placeholder="extraPlaceholder" placeholder="After asking a question, you may wait for a reply."></textarea></label>
+          <div class="field-pair"><label class="field"><span data-i18n="callBudget">Call budget</span><input id="call-budget" type="number" min="1" max="200" value="40"></label><label class="field"><span data-i18n="maxTokens">Output tokens / call</span><input id="max-tokens" type="number" min="128" max="4096" value="1024"></label></div>
+          <p class="help" data-i18n="budgetHelp">The call budget covers the whole experiment. Each utterance and each yield decision requires inference.</p>
+        </details>
+        <label class="consent" id="consent-field" hidden><input id="consent" type="checkbox"><span data-i18n="consent">Send the conversation and context to the selected model. Hosted APIs may incur charges.</span></label>
+        <button id="start" class="button primary" type="submit"><span data-i18n="start">Start experiment</span> ↗</button>
+        <p class="help start-help" data-i18n="settingsHelp">Settings apply to new experiments. Traces are saved locally in runs/.</p>
+      </form>
+    </aside>
+    <section class="conversation panel" aria-label="Conversation" data-i18n-aria="conversation">
+      <div class="conversation-head"><div><h2 data-i18n="conversation">Conversation</h2><span id="session-label" class="mono session-label" data-i18n="notStarted">Not started</span></div><span class="state" id="state" data-state="waiting"><i></i><span id="state-label" data-i18n="state_waiting">Waiting</span></span></div>
+      <div class="metrics-strip"><div><span data-i18n="utterances">Utterances</span><strong id="metric-assistant">0</strong></div><div><span>yield</span><strong id="metric-yields">0</strong></div><div><span data-i18n="forcedStops">Forced stops</span><strong id="metric-forced_stops">0</strong></div><div><span data-i18n="calls">Calls</span><strong id="metric-calls">0<span> / 40</span></strong></div></div>
+      <div id="conversation" class="stream" role="log" aria-label="Public utterances" data-i18n-aria="publicUtterances" aria-live="polite" aria-relevant="additions">
+        <div class="empty-state" id="empty-state"><span class="empty-mark" aria-hidden="true">∴</span><h3 data-i18n="emptyTitle">It is nobody's turn yet.</h3><p data-i18n="emptyBody">Either person can begin. Make room for a different rhythm.</p><span class="empty-caption">EMIT ≠ YIELD</span></div>
+      </div>
+      <div class="composer-area">
+        <div class="floor-controls"><label><input id="typing-interrupt" type="checkbox" checked><span data-i18n="typingInterrupt">Interrupt when typing</span></label><div><button id="wake" class="text-button" disabled data-i18n="wake">Resume</button><button id="stop" class="text-button stop" disabled data-i18n="stop">■ Stop</button></div></div>
+        <form id="composer" class="composer"><label class="sr-only" for="message" data-i18n="humanMessage">Human message</label><textarea id="message" rows="2" maxlength="8000" data-i18n-placeholder="messagePlaceholder" placeholder="You can speak in the middle, too." disabled></textarea><button id="send" class="send-button" type="submit" aria-label="Send message" data-i18n-aria="send" disabled>↑</button></form>
+        <div class="composer-bottom"><label><input id="auto-reply" type="checkbox" checked><span data-i18n="autoReply">Wake model after sending</span></label><span data-i18n="keyboardHelp">Enter to send / Shift + Enter for a new line</span></div>
+      </div>
+    </section>
+    <aside class="observer panel" aria-label="Trace and observations" data-i18n-aria="observer">
+      <div class="section-heading"><h2 data-i18n="observe">Observe the boundaries</h2><span class="mono">02</span></div>
+      <p class="help observer-intro" data-i18n="observerIntro">Keep successes and failures. Public utterances and raw outputs are separate events.</p>
+      <div class="trace-toolbar"><span class="mono">EVENT TRACE</span><label class="sr-only" for="trace-filter" data-i18n="traceFilter">Event filter</label><select id="trace-filter"><option value="control" data-i18n="controlEvents">Control & utterances</option><option value="all" data-i18n="allEvents">All / including raw</option></select></div>
+      <div id="trace" class="trace"><p class="trace-empty" data-i18n="traceEmpty">Events will appear here.</p></div>
+      <div class="inspect-head"><h3 data-i18n="selectedEvent">Selected event</h3><span id="selected-label" class="mono" data-i18n="noneSelected">None</span></div>
+      <pre id="inspect" tabindex="0" data-i18n="inspectHelp">Select an event to inspect its contents.</pre>
+      <form id="annotation-form" class="annotation-form"><label class="field"><span data-i18n="annotationLabel">Observation label</span><select id="tag"><option value="redundant-continuation">redundant-continuation</option></select></label><label class="sr-only" for="note" data-i18n="observationNote">Observation note</label><textarea id="note" rows="2" maxlength="2000" data-i18n-placeholder="notePlaceholder" placeholder="What happened? What would you change?"></textarea><button id="annotate" class="button quiet" type="submit" disabled><span data-i18n="annotate">Save observation</span> ＋</button></form>
+      <p class="help observer-note" data-i18n="observerHelp">Automatic flags are candidates. Useful continuation and good silence still need human judgment.</p>
+    </aside>
+  </main>
+  <footer><span>NO FT · NO TOOL EXECUTION · APPLICATION-LEVEL PROTOCOL</span><span id="footer-status" data-i18n="footer">The model's native chat template is unchanged.</span></footer>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

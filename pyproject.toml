@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sr-turnless-lab"
+version = "0.2.0"
+description = "A local, non-agentic laboratory for utterance boundaries and explicit yield"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{name = "Ryo ∴ SpiralArchitect"}]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+local = ["torch>=2.2", "transformers>=4.45,<6"]
+
+[project.urls]
+Repository = "https://github.com/RyoSpiralArchitect/sr-turnless-lab"
+Issues = "https://github.com/RyoSpiralArchitect/sr-turnless-lab/issues"
+
+[project.scripts]
+turnless-lab = "turnless.server:main"
+sr-turnless-lab = "turnless.server:main"
+
+[tool.setuptools.package-data]
+turnless = ["web/*.html", "web/*.css", "web/*.js"]
+
+[tool.setuptools.packages.find]
+include = ["turnless*"]

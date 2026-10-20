@@ -1,0 +1,329 @@
+"use strict";
+const $ = (id) => document.getElementById(id);
+const t = window.I18N.t;
+let backends = [], lastSnapshot = null;
+const busyStates = new Set(["queued", "generating", "delaying"]);
+const visibleKinds = new Set(["utterance", "yield", "forced_stop", "interrupt", "pause", "wake", "protocol_error", "provider_error", "discard", "flag", "annotation", "session_open", "session_close", "harness_error"]);
+let token = "", sessionId = null, cursor = 0, status = "waiting", selected = null;
+let events = [], known = new Set(), openaiReady = false, providerReady = {}, compatHint = "", mutationChain = Promise.resolve();
+const storage = {
+  get(key) { try { return sessionStorage.getItem(key); } catch { return null; } },
+  set(key, value) { try { sessionStorage.setItem(key, value); } catch { /* storage may be disabled */ } },
+  remove(key) { try { sessionStorage.removeItem(key); } catch { /* storage may be disabled */ } },
+};
+let typingSignaled = false, creating = false, sendPending = false, toastTimer, pollErrors = 0;
+
+function toast(message, error = false) {
+  clearTimeout(toastTimer);
+  $("toast").textContent = message;
+  $("toast").className = "toast" + (error ? " error" : "");
+  $("toast").hidden = false;
+  toastTimer = setTimeout(() => { $("toast").hidden = true; }, error ? 7000 : 3000);
+}
+async function request(path, body = undefined) {
+  const response = await fetch(path, {method: body === undefined ? "GET" : "POST",
+    headers: {"X-Turnless-Token": token, ...(body === undefined ? {} : {"Content-Type": "application/json"})},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  let data;
+  try { data = await response.json(); } catch { throw new Error(t("unreadableResponse")); }
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+function enqueue(task) {
+  const result = mutationChain.then(task);
+  mutationChain = result.catch(() => {});
+  return result;
+}
+function mutate(path, extra = {}) {
+  const sid = sessionId;
+  if (!sid) return Promise.reject(new Error(t("startFirst")));
+  return enqueue(async () => {
+    const data = await request(path, {session: sid, ...extra});
+    if (sid === sessionId) ingest(data);
+    return data;
+  });
+}
+function node(tag, className = "", text = undefined) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+function timeLabel(ms) { return (ms / 1000).toFixed(1) + "s"; }
+function controlText(e) {
+  if (e.kind === "yield") return t("yieldEvent", {n: e.emitted_in_cycle});
+  if (e.kind === "forced_stop") return `harness stop · ${e.reason}`;
+  if (e.kind === "interrupt") return `interrupt · ${e.reason === "human_typing" ? t("typingEvent") : e.reason}`;
+  if (e.kind === "provider_error") return t("providerError");
+  if (e.kind === "protocol_error") return t("protocolError");
+  return e.kind;
+}
+function appendConversation(e) {
+  if (e.kind !== "utterance" && !["yield", "forced_stop", "interrupt", "protocol_error", "provider_error"].includes(e.kind)) return;
+  $("empty-state")?.remove();
+  const stream = $("conversation");
+  const shouldScroll = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 110;
+  if (e.kind === "utterance") {
+    const article = node("article", "utterance " + e.speaker);
+    article.dataset.seq = String(e.seq);
+    article.append(node("div", "avatar", e.speaker === "human" ? "U" : "A"));
+    const body = node("div", "utterance-content");
+    const heading = node("div", "speaker-line");
+    const pick = node("button", "speaker utterance-select", e.speaker === "human" ? "HUMAN" : "ASSISTANT");
+    pick.type = "button";
+    pick.title = t("selectUtterance");
+    pick.addEventListener("click", () => selectEvent(e.seq));
+    heading.append(pick, node("span", "event-time", `${timeLabel(e.at_ms)} · #${e.seq}`));
+    body.append(heading, node("p", "", e.text));
+    article.append(body);
+    stream.append(article);
+  } else {
+    const cls = e.kind === "interrupt" ? "interrupted" : e.kind.includes("error") || e.kind === "forced_stop" ? "warning" : "";
+    const row = node("div", "control-row " + cls);
+    row.append(node("span", "control-mark"), node("span", "", controlText(e)), node("span", "event-time", timeLabel(e.at_ms)));
+    stream.append(row);
+  }
+  if (shouldScroll) stream.scrollTop = stream.scrollHeight;
+}
+function renderTrace() {
+  const box = $("trace");
+  const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  const scroll = box.scrollTop;
+  const all = $("trace-filter").value === "all";
+  const shown = events.filter(e => all || visibleKinds.has(e.kind)).slice(-100);
+  box.replaceChildren();
+  if (!shown.length) { box.append(node("p", "trace-empty", t("traceEmpty"))); return; }
+  for (const e of shown) {
+    const warning = e.kind.includes("error") || e.kind === "forced_stop" || e.kind === "flag";
+    const row = node("button", `trace-event${warning ? " warning" : ""}${selected === e.seq ? " active" : ""}`);
+    row.type = "button";
+    const content = node("div");
+    content.append(node("strong", "", e.kind === "utterance" ? e.speaker + ".emit" : e.kind));
+    content.append(node("span", "", e.text || e.reason || e.tag || e.error || (e.kind === "raw_output" ? (e.discarded ? "discarded · " : "") + e.raw : `#${e.seq} · ${e.source || "harness"}`)));
+    row.append(node("time", "", timeLabel(e.at_ms)), content);
+    row.addEventListener("click", () => selectEvent(e.seq));
+    box.append(row);
+  }
+  box.scrollTop = stick ? box.scrollHeight : scroll;
+}
+function selectEvent(seq) {
+  selected = seq;
+  const event = events.find(e => e.seq === seq);
+  if (!event) return;
+  $("selected-label").textContent = `#${seq} / ${event.kind}`;
+  let detail = event;
+  if (event.kind === "utterance" && event.call_id) {
+    const raw = events.find(e => e.kind === "raw_output" && e.call_id === event.call_id);
+    detail = {public_event: event, provider_output: raw || null};
+  }
+  $("inspect").textContent = JSON.stringify(detail, null, 2);
+  $("annotate").disabled = !sessionId;
+  for (const el of $("conversation").querySelectorAll(".utterance")) el.classList.toggle("selected", Number(el.dataset.seq) === seq);
+  renderTrace();
+}
+function ingest(data) {
+  if (data.session_id !== sessionId || data.cursor < cursor) return;
+  lastSnapshot = data;
+  status = data.status;
+  const additions = (data.events || []).filter(e => !known.has(e.seq));
+  for (const e of additions) { known.add(e.seq); events.push(e); }
+  events.sort((a, b) => a.seq - b.seq);
+  for (const e of additions) appendConversation(e);
+  cursor = Math.max(cursor, data.cursor || 0);
+  const m = data.metrics;
+  for (const key of ["assistant", "yields", "forced_stops"]) $("metric-" + key).textContent = String(m[key]);
+  $("metric-calls").replaceChildren(document.createTextNode(String(m.calls)), node("span", "", ` / ${m.budget}`));
+  $("state").dataset.state = status;
+  $("state-label").textContent = t("state_" + status);
+  $("session-label").textContent = `RUN ${sessionId.slice(0, 8)} · ${data.settings.policy}`;
+  const fixture = data.settings.provider === "fixture";
+  const modelLabel = data.settings.model.length > 40 ? data.settings.model.slice(0, 40) + "…" : data.settings.model;
+  $("provider-label").textContent = fixture ? t("fixtureActive") : `${data.settings.provider} / ${modelLabel}`;
+  $("footer-status").textContent = fixture ? t("fixtureMetrics", m) : t("liveMetrics", {...m, input: m.input_tokens, output: m.output_tokens}) + (data.inflight ? t("upstream") : "");
+  $("wake").disabled = busyStates.has(status) || status === "closed";
+  $("stop").disabled = status === "closed";
+  $("message").disabled = status === "closed";
+  $("send").disabled = status === "closed" || sendPending;
+  $("export").disabled = false;
+  if (additions.length) renderTrace();
+  if (!selected && additions.length) selectEvent(additions.at(-1).seq);
+}
+function settings() {
+  return {provider: $("provider").value, model: $("model").value.trim(),
+    compat_base_url: $("provider").value === "openai_compat" ? $("compat-base-url").value.trim() : "",
+    conversation_language: $("conversation-language").value,
+    anthropic_mode: $("anthropic-mode").value, local_device: $("local-device").value,
+    fixture_case: $("fixture-case").value, structured: $("structured").value === "true",
+    proactive: $("proactive").checked, policy: $("policy").value,
+    max_utterances: Number($("max-utterances").value), min_gap_ms: Number($("min-gap").value),
+    call_budget: Number($("call-budget").value), max_output_tokens: Number($("max-tokens").value),
+    context: $("context").value, prompt_extra: $("prompt-extra").value, consent: $("consent").checked};
+}
+function providerChanged() {
+  const provider = $("provider").value;
+  const spec = backends.find(b => b.id === provider);
+  const fixture = provider === "fixture", local = provider === "local";
+  $("model-fields").hidden = fixture;
+  $("model").required = !fixture;
+  $("fixture-field").hidden = !fixture;
+  $("consent-field").hidden = fixture;
+  $("consent").required = !fixture;
+  $("compat-url-field").hidden = provider !== "openai_compat";
+  $("compat-base-url").required = provider === "openai_compat";
+  $("local-device-field").hidden = !local;
+  $("anthropic-mode-field").hidden = provider !== "anthropic";
+  $("model-label").textContent = t(local ? "modelDirectory" : "modelId");
+  $("model").placeholder = t(local ? "localPlaceholder" : "modelPlaceholder");
+  $("provider-help").textContent = t("help_" + provider);
+  $("structured").disabled = spec ? !spec.structured_supported : false;
+  if (local) $("structured").value = "false";
+  if (fixture) $("key-status").textContent = "";
+  else if (local) $("key-status").textContent = t("localReady");
+  else if (provider === "ollama") $("key-status").textContent = t("ollamaReady");
+  else if (provider === "openai_compat") $("key-status").textContent = t("customCredentials");
+  else $("key-status").textContent = t(providerReady[provider] ? "credentialsReady" : "credentialsMissing", {env: spec?.key_env || ""});
+  const mode = $("structured").value !== "true" ? "prompt_only"
+    : provider === "anthropic" && $("anthropic-mode").value === "tool" ? "anthropic_forced_tool" : spec?.schema_mode;
+  $("constraint-help").textContent = t(local ? "localConstraint" : fixture ? "fixtureConstraint" : "constraint", {mode});
+}
+function localizeLiveView() {
+  providerChanged();
+  for (const option of $("provider").options) if (option.value === "fixture") option.textContent = t("fixtureLabel");
+  if (sessionId) {
+    $("conversation").replaceChildren();
+    for (const event of events) appendConversation(event);
+    $("start").replaceChildren(document.createTextNode(t("newExperiment")), node("span", "", "↗"));
+    if (lastSnapshot) ingest(lastSnapshot);
+    if (selected) selectEvent(selected);
+  }
+  renderTrace();
+}
+$("ui-language").addEventListener("change", () => {
+  window.I18N.setLanguage($("ui-language").value);
+  localizeLiveView();
+});
+$("structured").addEventListener("change", providerChanged);
+$("anthropic-mode").addEventListener("change", providerChanged);
+$("provider").addEventListener("change", providerChanged);
+$("max-utterances").addEventListener("input", () => { $("max-value").value = $("max-utterances").value; });
+$("min-gap").addEventListener("input", () => { $("gap-value").value = $("min-gap").value + " ms"; });
+$("trace-filter").addEventListener("change", renderTrace);
+$("settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (creating) return;
+  const config = settings();
+  creating = true; $("start").disabled = true;
+  try {
+    await enqueue(async () => {
+      if (sessionId) {
+        try { await request("/api/close", {session: sessionId}); } catch { /* stale prior server/session */ }
+      }
+      const data = await request("/api/session", config);
+      sessionId = data.session_id; cursor = 0; selected = null; events = []; known = new Set();
+      typingSignaled = false;
+      $("conversation").replaceChildren();
+      $("inspect").textContent = t("inspectHelp");
+      $("selected-label").textContent = t("noneSelected");
+      storage.set("turnless-session", sessionId);
+      ingest(data);
+      $("start").replaceChildren(document.createTextNode(t("newExperiment")), node("span", "", "↗"));
+      toast(config.provider === "fixture" ? t("fixtureStarted") : t("modelStarted"));
+    });
+  } catch (error) { toast(error.message, true); }
+  finally { creating = false; $("start").disabled = false; }
+});
+$("message").addEventListener("input", () => {
+  if (sessionId && $("typing-interrupt").checked && !typingSignaled && $("message").value && busyStates.has(status)) {
+    typingSignaled = true;
+    mutate("/api/interrupt", {reason: "human_typing"}).catch(error => toast(error.message, true));
+  }
+});
+$("message").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+    event.preventDefault(); $("composer").requestSubmit();
+  }
+});
+$("composer").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const text = $("message").value;
+  if (!text.trim() || !sessionId || sendPending) return;
+  const autoReply = $("auto-reply").checked;
+  sendPending = true; $("send").disabled = true; $("message").value = ""; typingSignaled = false;
+  try { await mutate("/api/human", {text, auto_reply: autoReply}); }
+  catch (error) { if (!$("message").value) $("message").value = text; toast(error.message, true); }
+  finally { sendPending = false; $("send").disabled = status === "closed"; $("message").focus(); }
+});
+$("stop").addEventListener("click", () => mutate("/api/interrupt", {reason: "operator_stop"}).then(() => toast(t("stopped"))).catch(error => toast(error.message, true)));
+$("wake").addEventListener("click", () => { typingSignaled = false; mutate("/api/wake").catch(error => toast(error.message, true)); });
+$("annotation-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!selected) return;
+  try {
+    await mutate("/api/annotate", {target_seq: selected, tag: $("tag").value, note: $("note").value});
+    $("note").value = ""; toast(t("annotated"));
+  } catch (error) { toast(error.message, true); }
+});
+$("export").addEventListener("click", async () => {
+  if (!sessionId) return;
+  try {
+    const response = await fetch(`/api/export?session=${sessionId}`, {headers: {"X-Turnless-Token": token}});
+    if (!response.ok) throw new Error(t("exportFailed"));
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a"); link.href = url; link.download = `turnless-${sessionId.slice(0,8)}.jsonl`;
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+    toast(t("exported"));
+  } catch (error) { toast(error.message, true); }
+});
+async function poll() {
+  const sid = sessionId;
+  if (sid) {
+    try {
+      const data = await request(`/api/events?session=${sid}&after=${cursor}`);
+      if (sid === sessionId) ingest(data);
+      pollErrors = 0;
+    } catch (error) {
+      pollErrors++;
+      if (pollErrors === 3) toast(t("reconnecting"), true);
+    }
+  }
+  setTimeout(poll, pollErrors ? 1500 : 250);
+}
+async function boot() {
+  try {
+    const data = await request("/api/bootstrap");
+    token = data.token;
+    providerReady = data.providers || {};
+    backends = data.backends || [];
+    $("provider").replaceChildren(...backends.map(spec => {
+      const option = node("option", "", spec.id === "fixture" ? t("fixtureLabel") : spec.label);
+      option.value = spec.id; return option;
+    }));
+    openaiReady = !!providerReady.openai;
+    compatHint = data.compat_base_url || "";
+    if (compatHint && !$("compat-base-url").value) $("compat-base-url").value = compatHint;
+    $("tag").replaceChildren(...data.tags.map(tag => { const opt = node("option", "", tag); opt.value = tag; return opt; }));
+    $("tag").value = "redundant-continuation";
+    providerChanged();
+    const stored = storage.get("turnless-session");
+    if (stored) {
+      try {
+        const existing = await request(`/api/events?session=${stored}`);
+        sessionId = stored; ingest(existing);
+        const config = existing.settings;
+        const fields = {provider: "provider", model: "model", structured: "structured", policy: "policy",
+          max_utterances: "max-utterances", min_gap_ms: "min-gap", call_budget: "call-budget",
+          max_output_tokens: "max-tokens", context: "context", prompt_extra: "prompt-extra",
+          compat_base_url: "compat-base-url", conversation_language: "conversation-language",
+          anthropic_mode: "anthropic-mode", local_device: "local-device", fixture_case: "fixture-case"};
+        for (const [key, id] of Object.entries(fields)) if (config[key] !== undefined) $(id).value = String(config[key]);
+        $("proactive").checked = config.proactive;
+        $("consent").checked = config.consent;
+        $("max-value").value = config.max_utterances;
+        $("gap-value").value = config.min_gap_ms + " ms";
+        localizeLiveView();
+      } catch { storage.remove("turnless-session"); }
+    }
+    poll();
+  } catch (error) { toast(t("bootError", {error: error.message}), true); $("start").disabled = true; }
+}
+boot();
